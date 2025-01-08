@@ -6,7 +6,14 @@ import ebooklib
 from ebooklib import epub
 from bs4 import BeautifulSoup
 import re
-from typing import Dict, List, Set, Optional
+from typing import Dict, List, Set, Optional, Tuple
+from openai import OpenAI
+import json
+import datetime
+from pathlib import Path
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+
 
 class EPUBTagSelector:
     def __init__(self, epub_path: str):
@@ -388,46 +395,155 @@ class PatternReviewDialog:
         self.selections = selections
         self.html_map = html_map
         self.patterns = {}
+        self.log_path = Path("logs/pattern_generation")
+        self.log_path.mkdir(parents=True, exist_ok=True)
         self.setup_ui()
+        if not OPENAI_API_KEY:
+            raise ValueError("OPENAI_API_KEY environment variable is required")
         
     def generate_patterns(self):
         """Generate regex patterns with negative lookaheads"""
-        # First collect all patterns by category
-        category_patterns = {}
+        self.patterns = self.get_patterns_from_gpt()
+
+    def format_examples_for_prompt(self) -> Dict[str, List[dict]]:
+        examples = {}
         for category, items in self.selections.items():
             if not items:
                 continue
                 
-            tag_patterns = []
-            for _, html_info in items:
-                immediate_tags = []
-                for tag, classes, id, attrs in html_info:
-                    pattern = f"<{tag}"
-                    if classes:
-                        pattern += f'[^>]*class="[^"]*{" ".join(classes)}[^"]*"'
-                    if id:
-                        pattern += f'[^>]*id="{id}"'
-                    pattern += "[^>]*>"
-                    immediate_tags.append(pattern)
+            category_examples = []
+            for text, html_info in items:
+                # Get text snippets
+                text_preview = {
+                    'start': text[:5],
+                    'end': text[-5:] if len(text) > 5 else text
+                }
                 
-                tag_pattern = "".join(immediate_tags)
-                tag_patterns.append(tag_pattern)
-            
-            if tag_patterns:
-                category_patterns[category] = tag_patterns
+                # Convert tuple format back to full HTML structure
+                html_structure = []
+                current_html = ""
+                for tag, classes, id, attrs in html_info:
+                    tag_str = f"<{tag}"
+                    if classes:
+                        tag_str += f' class="{" ".join(classes)}"'
+                    if id:
+                        tag_str += f' id="{id}"'
+                    for k, v in attrs:
+                        tag_str += f' {k}="{v}"'
+                    tag_str += ">"
+                    current_html = tag_str + current_html + f"</{tag}>"
+                    html_structure.append(current_html)
+                
+                category_examples.append({
+                    'text_preview': text_preview,
+                    'html': current_html
+                })
+            examples[category] = category_examples
+        return examples
+
+    def generate_gpt_prompt(self, examples: Dict[str, List[dict]]) -> str:
+        prompt = ("Generate regex patterns that match HTML structures and capture the text content. "
+                 "Patterns must match their category's structure exactly and not match other categories.\n\n")
         
-        # Now create patterns with negative lookaheads
-        for category in category_patterns:
-            other_patterns = []
-            for other_cat, patterns in category_patterns.items():
-                if other_cat != category:
-                    other_patterns.extend(patterns)
+        for category, examples_list in examples.items():
+            prompt += f"\n{category.upper()} examples:\n"
+            for ex in examples_list:
+                prompt += (f"- HTML: {ex['html']}\n"
+                         f"  Text starts: {ex['text_preview']['start']}, ends: {ex['text_preview']['end']}\n")
+        return prompt
+
+    def log_interaction(self, prompt: str, response: str, results: dict):
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        log_file = self.log_path / f"pattern_gen_{timestamp}.json"
+        
+        log_data = {
+            'timestamp': timestamp,
+            'prompt': prompt,
+            'response': response,
+            'results': results
+        }
+        
+        with open(log_file, 'w') as f:
+            json.dump(log_data, f, indent=2)
+
+    def test_pattern(self, category, pattern_widget, results_widget):
+        pattern = pattern_widget.get("1.0", tk.END).strip()
+        results_widget.delete("1.0", tk.END)
+        
+        try:
+            results = {
+                'matches': [],
+                'false_positives': []
+            }
             
-            if other_patterns:
-                negative_lookahead = "".join(f"(?!{p})" for p in other_patterns)
-                self.patterns[category] = f"{negative_lookahead}({'|'.join(category_patterns[category])})"
-            else:
-                self.patterns[category] = f"({'|'.join(category_patterns[category])})"
+            regex = re.compile(pattern, re.DOTALL)
+            for text, html_info in self.html_map.items():
+                html = html_info['html']
+                if regex.search(html):
+                    found_in = None
+                    for cat, selections in self.selections.items():
+                        if any(sel[0] == text for sel in selections):
+                            found_in = cat
+                            break
+                    
+                    if found_in == category:
+                        results['matches'].append(text)
+                    elif found_in:
+                        results['false_positives'].append((text, found_in))
+            
+            # Log results
+            self.log_interaction(
+                self.last_prompt,
+                self.last_response,
+                results
+            )
+            
+            # Display results
+            self._display_results(results_widget, results)
+            
+        except re.error as e:
+            results_widget.insert("1.0", f"Invalid pattern: {str(e)}\n")
+
+    def get_patterns_from_gpt(self) -> Dict[str, str]:
+        """Get regex patterns using GPT-4 chat completion"""
+        examples = self.format_examples_for_prompt()
+        
+        try:
+            client = OpenAI()
+            
+            # Create messages for chat completion
+            messages = [
+                {
+                    "role": "system", 
+                    "content": "You are a regex pattern generation assistant. Generate precise patterns that match HTML structures."
+                },
+                {
+                    "role": "user",
+                    "content": self.generate_gpt_prompt(examples)
+                }
+            ]
+            
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=messages,
+                temperature=0.7,
+                max_tokens=500
+            )
+            
+            # Parse response from new format
+            patterns = {}
+            response_text = response.choices[0].message.content
+            
+            for line in response_text.strip().split('\n'):
+                if ':' in line:
+                    category, pattern = line.split(':', 1)
+                    patterns[category.lower().strip()] = pattern.strip()
+            
+            return patterns
+            
+        except Exception as e:
+            print(f"Error getting patterns from GPT: {e}")
+            return {}
 
     def setup_ui(self):
         self.generate_patterns()

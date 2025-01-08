@@ -435,51 +435,133 @@ class PatternReviewDialog:
         self.selections = selections
         self.html_map = html_map
         self.patterns = {}
+        self.html_formatter = HTMLFormatter()
         self.log_path = Path("logs/pattern_generation")
         self.log_path.mkdir(parents=True, exist_ok=True)
-        self.setup_ui()
-        if not OPENAI_API_KEY:
-            raise ValueError("OPENAI_API_KEY environment variable is required")
         
+        # Generate and test patterns before UI
+        self.last_prompt = ""
+        self.last_response = ""
+        self.test_results = {}
+        self.extractor = HTMLCategoryExtractor(self.selections)
+        self.run_initial_tests()
+        self.setup_ui()
+
+    def run_initial_tests(self):
+        """Run initial tests to generate patterns and results"""
+        
+        for category in self.selections:
+            results = {
+                'matches': [],
+                'false_positives': []
+            }
+            
+            for text, html_info in self.html_map.items():
+                html = html_info['html']
+                extracted = self.extractor.extract_category(html)
+                
+                if category in extracted:
+                    if any(text == match['text'] for match in extracted[category]):
+                        results['matches'].append(text)
+                    else:
+                        # Check if this text belongs to another category
+                        found_in = None
+                        for cat, selections in self.selections.items():
+                            if any(sel[0] == text for sel in selections):
+                                found_in = cat
+                                break
+                        if found_in:
+                            results['false_positives'].append((text, found_in))
+            
+            self.test_results[category] = results
+        
+        self.log_interaction(
+            "BeautifulSoup Category Extraction",
+            json.dumps(self.extractor.category_patterns, indent=2),
+            self.test_results
+        )
+
+    def _display_results(self, results_widget, results):
+        """Display pattern matching results in widget"""
+        results_widget.delete("1.0", tk.END)
+        
+        # Configure tags for coloring
+        results_widget.tag_configure("success", foreground="green")
+        results_widget.tag_configure("error", foreground="red")
+        
+        if 'error' in results:
+            results_widget.insert(tk.END, f"Error: {results['error']}\n", "error")
+            return
+            
+        # Show matches
+        results_widget.insert(tk.END, f"=== Matches ({len(results['matches'])}) ===\n")
+        for text in results['matches']:
+            results_widget.insert(tk.END, f"✓ {text[:100]}...\n\n", "success")
+        
+        # Show false positives
+        if results['false_positives']:
+            results_widget.insert(tk.END, 
+                f"\n=== False Positives ({len(results['false_positives'])}) ===\n")
+            for text, cat in results['false_positives']:
+                results_widget.insert(tk.END, 
+                    f"❌ Matches {cat}: {text[:100]}...\n\n", "error")
+
+    def setup_ui(self):
+        """Setup UI with pre-generated patterns and results"""
+        notebook = ttk.Notebook(self.dialog)
+        notebook.pack(fill=tk.BOTH, expand=True)
+        
+        for category, pattern in self.patterns.items():
+            frame = ttk.Frame(notebook)
+            notebook.add(frame, text=category.title())
+            
+            # Pattern editor with results
+            ttk.Label(frame, text="Pattern:").pack(pady=5)
+            pattern_text = tk.Text(frame, height=4)
+            pattern_text.insert("1.0", pattern)
+            pattern_text.pack(fill=tk.X, padx=5)
+            
+            # Pre-populated results
+            results_text = tk.Text(frame, height=20)
+            results_text.pack(fill=tk.BOTH, expand=True, padx=5)
+            
+            if category in self.test_results:
+                self._display_results(results_text, self.test_results[category])
+            
+            # Test button for re-testing
+            ttk.Button(
+                frame,
+                text="Test Pattern",
+                command=lambda p=pattern_text, r=results_text, c=category: 
+                    self.test_pattern(c, p, r)
+            ).pack(pady=5)
+
+
     def generate_patterns(self):
         """Generate regex patterns with negative lookaheads"""
         self.patterns = self.get_patterns_from_gpt()
 
-    def format_examples_for_prompt(self) -> Dict[str, List[dict]]:
-        examples = {}
+    def format_examples_for_prompt(self) -> str:
+        formatted_examples = []
+        
         for category, items in self.selections.items():
             if not items:
                 continue
                 
+            formatted_examples.append(f"\n{category.upper()}:")
             category_examples = []
+            
             for text, html_info in items:
-                # Get text snippets
-                text_preview = {
-                    'start': text[:5],
-                    'end': text[-5:] if len(text) > 5 else text
-                }
-                
-                # Convert tuple format back to full HTML structure
-                html_structure = []
-                current_html = ""
-                for tag, classes, id, attrs in html_info:
-                    tag_str = f"<{tag}"
-                    if classes:
-                        tag_str += f' class="{" ".join(classes)}"'
-                    if id:
-                        tag_str += f' id="{id}"'
-                    for k, v in attrs:
-                        tag_str += f' {k}="{v}"'
-                    tag_str += ">"
-                    current_html = tag_str + current_html + f"</{tag}>"
-                    html_structure.append(current_html)
-                
-                category_examples.append({
-                    'text_preview': text_preview,
-                    'html': current_html
-                })
-            examples[category] = category_examples
-        return examples
+                tags = HTMLFormatter.extract_immediate_tags(html_info)
+                tag_structure = ""
+                for open_tag, close_tag in tags:
+                    tag_structure = f"{open_tag}{tag_structure}{close_tag}"
+                preview = f"[Text start: {text[:5]}, end: {text[-5:]}]"
+                category_examples.append(f"{tag_structure} {preview}")
+            
+            formatted_examples.append(",\n".join(category_examples))
+        
+        return "\n".join(formatted_examples)
 
     def generate_gpt_prompt(self, examples: Dict[str, List[dict]]) -> str:
         prompt = (
@@ -510,11 +592,38 @@ class PatternReviewDialog:
         with open(log_file, 'w') as f:
             json.dump(log_data, f, indent=2)
 
+    def json_to_regex(self, json_pattern: str) -> str:
+        """Convert JSON-encoded regex pattern to valid regex string"""
+        try:
+            # Remove outer quotes
+            if json_pattern.startswith('"') and json_pattern.endswith('"'):
+                pattern = json_pattern[1:-1]
+            else:
+                pattern = json_pattern
+                
+            # Convert JSON escapes to regex escapes
+            pattern = pattern.replace('\\\\', '\\')  # Unescape backslashes
+            pattern = pattern.replace('\\"', '"')    # Unescape quotes
+            
+            # Test pattern validity
+            re.compile(pattern, re.DOTALL)
+            return pattern
+            
+        except re.error as e:
+            print(f"Invalid regex pattern: {e}")
+            return None
+
     def test_pattern(self, category, pattern_widget, results_widget):
-        pattern = pattern_widget.get("1.0", tk.END).strip()
+        """Test pattern with json string conversion"""
+        json_pattern = pattern_widget.get("1.0", tk.END).strip()
         results_widget.delete("1.0", tk.END)
         
         try:
+            pattern = self.json_to_regex(json_pattern)
+            if not pattern:
+                results_widget.insert("1.0", "Invalid pattern format")
+                return
+                
             results = {
                 'matches': [],
                 'false_positives': []
@@ -602,7 +711,7 @@ class PatternReviewDialog:
             return {}
 
     def setup_ui(self):
-        self.generate_patterns()
+        """Setup UI with pre-generated patterns and results"""
         notebook = ttk.Notebook(self.dialog)
         notebook.pack(fill=tk.BOTH, expand=True)
         
@@ -610,18 +719,20 @@ class PatternReviewDialog:
             frame = ttk.Frame(notebook)
             notebook.add(frame, text=category.title())
             
-            # Pattern editor
+            # Pattern editor with results
             ttk.Label(frame, text="Pattern:").pack(pady=5)
             pattern_text = tk.Text(frame, height=4)
             pattern_text.insert("1.0", pattern)
             pattern_text.pack(fill=tk.X, padx=5)
             
-            # Test results
-            ttk.Label(frame, text="Matching Blocks:").pack(pady=5)
-            results = tk.Text(frame, height=20)
-            results.pack(fill=tk.BOTH, expand=True, padx=5)
+            # Pre-populated results
+            results_text = tk.Text(frame, height=20)
+            results_text.pack(fill=tk.BOTH, expand=True, padx=5)
             
-            # Test button
+            if category in self.test_results:
+                self._display_results(results_text, self.test_results[category])
+            
+            # Test button for re-testing
             ttk.Button(
                 frame,
                 text="Test Pattern",

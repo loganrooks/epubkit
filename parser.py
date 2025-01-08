@@ -113,20 +113,38 @@ class EPUBTagSelector:
             for element in soup.find_all(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6']):
                 text = element.get_text().strip()
                 if text:
-                    # Store full tag hierarchy
+                    # Store complete tag hierarchy including spans
                     tag_hierarchy = []
                     current = element
-                    while current and current.name:
-                        tag_info = {
-                            'tag': current.name,
-                            'classes': current.get('class', []),
-                            'id': current.get('id', ''),
-                            'attrs': {k:v for k,v in current.attrs.items() 
-                                    if k not in ['class', 'id']}
-                        }
-                        tag_hierarchy.append(tag_info)
-                        current = current.parent
-                        
+                    
+                    # First, collect all spans inside the main element
+                    spans = element.find_all('span', recursive=True)
+                    inner_tags = []
+                    
+                    # Start with innermost span and work outwards
+                    for span in reversed(spans):
+                        tag_info = (
+                            'span',
+                            span.get('class', []),
+                            span.get('id', ''),
+                            tuple((k, v) for k, v in span.attrs.items() 
+                                if k not in ['class', 'id'])
+                        )
+                        inner_tags.append(tag_info)
+                    
+                    # Add the main element (p, h1, etc.)
+                    tag_info = (
+                        element.name,
+                        element.get('class', []),
+                        element.get('id', ''),
+                        tuple((k, v) for k, v in element.attrs.items() 
+                            if k not in ['class', 'id'])
+                    )
+                    
+                    # Combine main element with inner spans
+                    tag_hierarchy = [tag_info] + inner_tags
+                    
+                    # Store in html_map
                     self.html_map[text] = {
                         'tag_hierarchy': tag_hierarchy,
                         'html': str(element)

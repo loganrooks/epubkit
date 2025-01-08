@@ -268,12 +268,6 @@ class EPUBTagSelector:
     def get_selections(self) -> Dict[str, Set[str]]:
         """Return the collected selections"""
         return self.selected_tags
-        
-def get_user_tag_examples(epub_path: str) -> Dict[str, Set[str]]:
-    """Run the GUI and return user selections"""
-    selector = EPUBTagSelector(epub_path)
-    selector.root.mainloop()
-    return selector.get_selections()
 
 class SelectionReviewDialog:
     def __init__(self, parent, selections):
@@ -371,6 +365,151 @@ class SelectionReviewDialog:
             (f"[{','.join(f'{k}={v}' for k,v in attrs)}]" if attrs else "")
             for tag, classes, id, attrs in reversed(hierarchy_tuple)
         )
+    
+    def finish_selection(self):
+        if not self.selected_tags['body']:
+            self.status_label.config(text="Error: Must select at least one body text example")
+            return
+            
+        review = SelectionReviewDialog(self.root, self.selected_tags)
+        self.root.wait_window(review.dialog)
+        
+        # Show pattern review
+        pattern_review = PatternReviewDialog(self.root, self.selected_tags, self.html_map)
+        self.root.wait_window(pattern_review.dialog)
+        
+        self.root.quit()
+        
+class PatternReviewDialog:
+    def __init__(self, parent, selections, html_map):
+        self.dialog = tk.Toplevel(parent)
+        self.dialog.title("Review Tag Patterns")
+        self.dialog.geometry("1000x800")
+        self.selections = selections
+        self.html_map = html_map
+        self.patterns = {}
+        self.setup_ui()
+        
+    def generate_patterns(self):
+        """Generate regex patterns with negative lookaheads"""
+        # First collect all patterns by category
+        category_patterns = {}
+        for category, items in self.selections.items():
+            if not items:
+                continue
+                
+            tag_patterns = []
+            for _, html_info in items:
+                immediate_tags = []
+                for tag, classes, id, attrs in html_info:
+                    pattern = f"<{tag}"
+                    if classes:
+                        pattern += f'[^>]*class="[^"]*{" ".join(classes)}[^"]*"'
+                    if id:
+                        pattern += f'[^>]*id="{id}"'
+                    pattern += "[^>]*>"
+                    immediate_tags.append(pattern)
+                
+                tag_pattern = "".join(immediate_tags)
+                tag_patterns.append(tag_pattern)
+            
+            if tag_patterns:
+                category_patterns[category] = tag_patterns
+        
+        # Now create patterns with negative lookaheads
+        for category in category_patterns:
+            other_patterns = []
+            for other_cat, patterns in category_patterns.items():
+                if other_cat != category:
+                    other_patterns.extend(patterns)
+            
+            if other_patterns:
+                negative_lookahead = "".join(f"(?!{p})" for p in other_patterns)
+                self.patterns[category] = f"{negative_lookahead}({'|'.join(category_patterns[category])})"
+            else:
+                self.patterns[category] = f"({'|'.join(category_patterns[category])})"
+
+    def setup_ui(self):
+        self.generate_patterns()
+        notebook = ttk.Notebook(self.dialog)
+        notebook.pack(fill=tk.BOTH, expand=True)
+        
+        for category, pattern in self.patterns.items():
+            frame = ttk.Frame(notebook)
+            notebook.add(frame, text=category.title())
+            
+            # Pattern editor
+            ttk.Label(frame, text="Pattern:").pack(pady=5)
+            pattern_text = tk.Text(frame, height=4)
+            pattern_text.insert("1.0", pattern)
+            pattern_text.pack(fill=tk.X, padx=5)
+            
+            # Test results
+            ttk.Label(frame, text="Matching Blocks:").pack(pady=5)
+            results = tk.Text(frame, height=20)
+            results.pack(fill=tk.BOTH, expand=True, padx=5)
+            
+            # Test button
+            ttk.Button(
+                frame,
+                text="Test Pattern",
+                command=lambda p=pattern_text, r=results: self.test_pattern(category, p, r)
+            ).pack(pady=5)
+    
+    def test_pattern(self, category, pattern_widget, results_widget):
+        """Test pattern against HTML content with category validation"""
+        pattern = pattern_widget.get("1.0", tk.END).strip()
+        results_widget.delete("1.0", tk.END)
+        
+        try:
+            regex = re.compile(pattern, re.DOTALL)
+            matches = []
+            false_positives = []
+            
+            # Test against all HTML content
+            for text, html_info in self.html_map.items():
+                html = html_info['html']
+                if regex.search(html):
+                    # Check if this text block was selected in any category
+                    found_in = None
+                    for cat, selections in self.selections.items():
+                        if any(sel[0] == text for sel in selections):
+                            found_in = cat
+                            break
+                    
+                    if found_in == category:
+                        matches.append(text)
+                    elif found_in:
+                        false_positives.append((text, found_in))
+                    else:
+                        matches.append(text)
+            
+            # Display results
+            results_widget.insert(tk.END, f"=== Matches ({len(matches)}) ===\n")
+            for text in matches:
+                results_widget.insert(tk.END, f"✓ {text[:100]}...\n\n")
+            
+            if false_positives:
+                results_widget.insert(tk.END, f"\n=== False Positives ({len(false_positives)}) ===\n")
+                results_widget.tag_configure("error", foreground="red")
+                for text, cat in false_positives:
+                    results_widget.insert(tk.END, f"❌ Matches {cat}: {text[:100]}...\n\n", "error")
+                
+        except re.error as e:
+            results_widget.insert("1.0", f"Invalid pattern: {str(e)}\n")
+
+def get_user_tag_examples(epub_path: str) -> Dict[str, Set[str]]:
+    """Run the GUI and return user selections"""
+    selector = EPUBTagSelector(epub_path)
+    selector.root.mainloop()
+    if selector.selected_tags['body']:
+        pattern_review = PatternReviewDialog(
+            selector.root, 
+            selector.selected_tags,
+            selector.html_map
+        )
+        selector.root.wait_window(pattern_review.dialog)
+    return selector.get_selections()
         
 if __name__ == "__main__":
     epub_file = "resources/epubs/Being and Time - Martin Heidegger.epub"

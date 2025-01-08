@@ -482,14 +482,18 @@ class PatternReviewDialog:
         return examples
 
     def generate_gpt_prompt(self, examples: Dict[str, List[dict]]) -> str:
-        prompt = ("Generate regex patterns that match HTML structures and capture the text content. "
-                 "Patterns must match their category's structure exactly and not match other categories.\n\n")
+        prompt = (
+            "Generate regex patterns as a JSON string with the following requirements:\n"
+            "1. Only match structure exactly for each category\n"
+            "2. Do not match other categories' structures\n"
+            "3. Capture text content between tags\n"
+            "4. Response must be valid JSON with category names as keys\n"
+            "5. No other text besides the JSON string\n"
+            "6. Each field of the JSON string should match a given category.\n"
         
-        for category, examples_list in examples.items():
-            prompt += f"\n{category.upper()} examples:\n"
-            for ex in examples_list:
-                prompt += (f"- HTML: {ex['html']}\n"
-                         f"  Text starts: {ex['text_preview']['start']}, ends: {ex['text_preview']['end']}\n")
+            "HTML structures to match:\n"
+            f"{examples}\n"
+        )
         return prompt
 
     def log_interaction(self, prompt: str, response: str, results: dict):
@@ -531,18 +535,24 @@ class PatternReviewDialog:
                     elif found_in:
                         results['false_positives'].append((text, found_in))
             
-            # Log results
-            self.log_interaction(
-                self.last_prompt,
-                self.last_response,
-                results
-            )
-            
-            # Display results
             self._display_results(results_widget, results)
             
-        except re.error as e:
-            results_widget.insert("1.0", f"Invalid pattern: {str(e)}\n")
+        except Exception as e:
+            results_widget.insert("1.0", f"Error: {str(e)}")
+
+    def clean_gpt_response(self, response_text: str) -> str:
+        """Clean GPT response text before JSON parsing"""
+        # Remove leading/trailing quotes if present
+        if response_text.startswith("'") and response_text.endswith("'"):
+            response_text = response_text[1:-1]
+            
+        # Remove markdown code block syntax
+        response_text = response_text.replace('```json', '').replace('```', '')
+        
+        # Strip whitespace and newlines
+        response_text = response_text.strip()
+        
+        return response_text
 
     def get_patterns_from_gpt(self) -> Dict[str, str]:
         """Get regex patterns using GPT-4 chat completion"""
@@ -550,12 +560,12 @@ class PatternReviewDialog:
         
         try:
             client = OpenAI()
-            
-            # Create messages for chat completion
             messages = [
                 {
-                    "role": "system", 
-                    "content": "You are a regex pattern generation assistant. Generate precise patterns that match HTML structures."
+                    "role": "system",
+                    "content": ("You are a regex pattern generator. "
+                            "Respond only with a JSON string containing patterns. "
+                            "No other text or explanation.")
                 },
                 {
                     "role": "user",
@@ -567,20 +577,26 @@ class PatternReviewDialog:
                 model="gpt-4o-mini",
                 messages=messages,
                 temperature=0.7,
-                max_tokens=500
+                max_tokens=1000
             )
             
-            # Parse response from new format
-            patterns = {}
-            response_text = response.choices[0].message.content
+            response_text = response.choices[0].message.content.strip()
+            self.last_response = response_text
             
-            for line in response_text.strip().split('\n'):
-                if ':' in line:
-                    category, pattern = line.split(':', 1)
-                    patterns[category.lower().strip()] = pattern.strip()
+            # Clean response before parsing
+            cleaned_response = self.clean_gpt_response(response_text)
+            self.patterns = json.loads(cleaned_response)
             
-            return patterns
+            return self.patterns
             
+        except json.JSONDecodeError as e:
+            print(f"Error parsing GPT response as JSON: {e}")
+            self.log_interaction(
+                self.last_prompt,
+                response_text,  # Log original response
+                {'error': str(e)}
+            )
+            return {}
         except Exception as e:
             print(f"Error getting patterns from GPT: {e}")
             return {}
@@ -609,7 +625,8 @@ class PatternReviewDialog:
             ttk.Button(
                 frame,
                 text="Test Pattern",
-                command=lambda p=pattern_text, r=results: self.test_pattern(category, p, r)
+                command=lambda p=pattern_text, r=results_text, c=category: 
+                    self.test_pattern(c, p, r)
             ).pack(pady=5)
     
     def test_pattern(self, category, pattern_widget, results_widget):

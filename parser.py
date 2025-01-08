@@ -11,6 +11,7 @@ from openai import OpenAI
 import json
 import datetime
 from pathlib import Path
+from dataclasses import dataclass, asdict
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 
@@ -781,6 +782,127 @@ class PatternReviewDialog:
                 
         except re.error as e:
             results_widget.insert("1.0", f"Invalid pattern: {str(e)}\n")
+
+class HTMLFormatter:
+    @staticmethod
+    def extract_immediate_tags(html_info) -> list:
+        """Extract immediate containing tags from HTML structure"""
+        immediate_tags = []
+        current_nesting = []
+        
+        for tag, classes, tag_id, attrs in html_info:
+            # Only process p and span tags
+            if tag not in ['p', 'span']:
+                continue
+                
+            # Build opening tag
+            open_tag = f"<{tag}"
+            if classes:
+                open_tag += f' class="{" ".join(classes)}"'
+            if tag_id:
+                open_tag += f' id="{tag_id}"'
+            for k, v in attrs:
+                open_tag += f' {k}="{v}"'
+            open_tag += ">"
+            
+            # Build closing tag
+            close_tag = f"</{tag}>"
+            
+            immediate_tags.append((open_tag, close_tag))
+        
+        return list(reversed(immediate_tags))  # Reverse for proper nesting
+
+
+@dataclass
+class CategoryPattern:
+    """Represents a category's unique tag pattern"""
+    category: str
+    required_tags: List[Dict[str, Set[str]]]  # List of {tag: required_classes}
+    excluded_tags: List[Dict[str, Set[str]]]  # Tags that must not be present
+    file_position_pattern: Optional[str] = None  # For matching filepos IDs if needed
+    
+    def to_dict(self) -> dict:
+        """Convert to JSON serializable dictionary"""
+        return {
+            'category': self.category,
+            'required_tags': [
+                {k: list(v) for k, v in tag.items()}
+                for tag in self.required_tags
+            ],
+            'excluded_tags': [
+                {k: list(v) for k, v in tag.items()}
+                for tag in self.excluded_tags
+            ],
+            'file_position_pattern': self.file_position_pattern
+        }
+
+class HTMLCategoryExtractor:
+    def __init__(self, selections):
+        self.selections = selections
+        self.category_patterns: Dict[str, CategoryPattern] = self._build_category_patterns()
+    
+    def _build_category_patterns(self) -> Dict[str, CategoryPattern]:
+        """Build unique identifiers for each category"""
+        patterns = {}
+        for category, items in self.selections.items():
+            if not items:
+                continue
+            
+            # Collect common required tags/classes
+            required_tags = []
+            excluded_tags = []
+            file_position_pattern = None
+            
+            # Analyze tag signatures
+            tag_signatures = self._collect_tag_signatures(items)
+            
+            # Find common required patterns
+            for sig in tag_signatures:
+                for tag, classes in sig.items():
+                    if all(classes.issubset(other[tag]) 
+                          for other in tag_signatures if tag in other):
+                        required_tags.append({tag: classes})
+                        
+                    # Check for filepos pattern
+                    if 'filepos' in str(classes):
+                        file_position_pattern = r'filepos\d+'
+            
+            # Find excluded patterns (from other categories)
+            for other_cat, other_items in self.selections.items():
+                if other_cat != category:
+                    other_sigs = self._collect_tag_signatures(other_items)
+                    for sig in other_sigs:
+                        for tag, classes in sig.items():
+                            if not any(classes.issubset(req[tag]) 
+                                     for req in required_tags if tag in req):
+                                excluded_tags.append({tag: classes})
+            
+            patterns[category] = CategoryPattern(
+                category=category,
+                required_tags=required_tags,
+                excluded_tags=excluded_tags,
+                file_position_pattern=file_position_pattern
+            )
+            
+        return patterns
+    
+    def _collect_tag_signatures(self, items):
+        """Helper to collect tag signatures from items"""
+        signatures = []
+        for _, html_info in items:
+            sig = {}
+            for tag, classes, tag_id, _ in html_info:
+                if tag in ['p', 'span']:
+                    sig[tag] = set(classes)
+            signatures.append(sig)
+        return signatures
+    
+    def to_json(self) -> dict:
+        """Convert patterns to JSON serializable format"""
+        return {
+            category: pattern.to_dict()
+            for category, pattern in self.category_patterns.items()
+        }
 
 def get_user_tag_examples(epub_path: str) -> Dict[str, Set[str]]:
     """Run the GUI and return user selections"""

@@ -193,6 +193,35 @@ class EPUBTagSelector:
             self.text_display.configure(cursor="arrow")
             self.current_hover_tag = None
             
+    def _extract_immediate_tags(self, hierarchy_tuple):
+        """Extract immediate containing tags with no text between them"""
+        immediate_tags = []
+        for tag, classes, id, attrs in hierarchy_tuple:
+            tag_str = f"<{tag}"
+            if classes:
+                tag_str += f' class="{" ".join(classes)}"'
+            if id:
+                tag_str += f' id="{id}"'
+            for k, v in attrs:
+                tag_str += f' {k}="{v}"'
+            tag_str += ">"
+            immediate_tags.append((tag_str, f"</{tag}>"))
+        return immediate_tags
+
+    def _format_hierarchy(self, hierarchy_tuple, text):
+        """Format immediate nested tags for display"""
+        tags = self._extract_immediate_tags(hierarchy_tuple)
+        
+        # Build nested structure
+        html_preview = ""
+        for open_tag, close_tag in tags:
+            html_preview = f"{open_tag}{html_preview}{close_tag}"
+        
+        # Add text preview
+        text_preview = f"Text starts: '{text[:5]}', ends: '{text[-5:]}'"
+        
+        return f"Structure: {html_preview}\n{text_preview}"
+
     def handle_click(self, event):
         """Handle text selection with expanded hit area"""
         try:
@@ -218,34 +247,27 @@ class EPUBTagSelector:
                 if text and text in self.html_map:
                     # Format hierarchy text for display
                     tag_hierarchy = self.html_map[text]['tag_hierarchy']
-                    hierarchy_text = '\n'.join(
-                        f"{'  '*i}{t['tag']}" +
-                        (f".{'.'.join(t['classes'])}" if t['classes'] else "") +
-                        (f"#{t['id']}" if t['id'] else "") +
-                        (f"[{','.join(f'{k}={v}' for k,v in t['attrs'].items())}]" if t['attrs'] else "")
-                        for i, t in enumerate(reversed(tag_hierarchy))
-                    )
+                    hierarchy_text = self._format_hierarchy(tag_hierarchy, text)
                     
                     confirm = messagebox.askyesno(
                         "Confirm Selection",
                         f"Add this {self.current_selection_type} example?\n\n"
-                        f"Text: {text[:100]}...\n\n"
-                        f"Tag Hierarchy:\n{hierarchy_text}"
+                        f"{hierarchy_text}"
                     )
                     
                     if confirm:
                         # Convert dictionary to hashable format using tag_hierarchy
                         html_info = tuple(
-                            (t['tag'],
-                            tuple(sorted(t['classes'])),
-                            t['id'],
-                            tuple((k, v) for k, v in sorted(t['attrs'].items())))
+                            (t[0], # tag
+                            tuple(sorted(t[1])), # classes
+                            t[2], # id
+                            tuple((k, v) for k, v in sorted(t[3]))) # attrs
                             for t in tag_hierarchy
                         )
                         
                         self.selected_tags[self.current_selection_type].add((text, html_info))
                         self.status_label.config(
-                            text=f"Added {tag_hierarchy[0]['tag']} to {self.current_selection_type}"
+                            text=f"Added {tag_hierarchy[0][1]} to {self.current_selection_type}"
                         )
                         
         except tk.TclError:

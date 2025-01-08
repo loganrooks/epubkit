@@ -1,3 +1,4 @@
+import os
 import tkinter as tk
 from tkinter import ttk
 from tkinter import messagebox
@@ -12,6 +13,10 @@ class EPUBTagSelector:
         self.root = tk.Tk()
         self.root.title("EPUB Tag Selector")
         self.root.geometry("800x600")
+        # self.cursor_path = os.path.join(
+        #     os.path.dirname(os.path.abspath(__file__)), 
+        #     "resources/cursors"
+        # )      
         
         self.epub_path = epub_path
         self.selected_tags: Dict[str, Set[str]] = {
@@ -39,9 +44,21 @@ class EPUBTagSelector:
         self.text_display.bind("<Button-1>", self.handle_click)
         self.text_display.bind("<Motion>", self.handle_hover)
         self.text_display.bind("<Leave>", self.handle_leave)  # Add leave handler
-        
-        # Configure default cursor
+        # Add mouse motion binding for hover effect
+        self.text_display.tag_configure("hover", 
+            background="light pink",
+            font=("TkDefaultFont", 12, "bold"))
+
+       
+        # Set default small cursor
+        # cursor_spec = "@{}/arrow.xbm {}/arrow_mask.xbm black white".format(
+        #     self.cursor_path, 
+        #     self.cursor_path
+        # )
+
+        # self.text_display.configure(cursor=cursor_spec)
         self.text_display.configure(cursor="arrow")
+
 
         
         # Right panel for controls
@@ -77,118 +94,153 @@ class EPUBTagSelector:
         self.status_label = ttk.Label(self.control_frame, text="Select main headers")
         self.status_label.pack(pady=5)
 
-        # Add mouse motion binding for hover effect
-        self.text_display.tag_configure("hover", 
-            background="light pink",
-            font=("TkDefaultFont", 12, "bold"))
-        self.text_display.bind("<Motion>", self.handle_hover)
-        
-        
+
     def load_epub(self):
-        """Load and display EPUB content with preserved HTML structure"""
+        """Load EPUB content with proper spacing"""
         book = epub.read_epub(self.epub_path)
         self.text_display.delete('1.0', tk.END)
         
         for item in book.get_items_of_type(ebooklib.ITEM_DOCUMENT):
             soup = BeautifulSoup(item.get_content(), 'html.parser')
             
-            # Process each text block
             for element in soup.find_all(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6']):
                 text = element.get_text().strip()
                 if text:
-                    # Store HTML structure
+                    # Store full tag hierarchy
+                    tag_hierarchy = []
+                    current = element
+                    while current and current.name:
+                        tag_info = {
+                            'tag': current.name,
+                            'classes': current.get('class', []),
+                            'id': current.get('id', ''),
+                            'attrs': {k:v for k,v in current.attrs.items() 
+                                    if k not in ['class', 'id']}
+                        }
+                        tag_hierarchy.append(tag_info)
+                        current = current.parent
+                        
                     self.html_map[text] = {
-                        'tag': element.name,
-                        'classes': element.get('class', []),
-                        'id': element.get('id', ''),
+                        'tag_hierarchy': tag_hierarchy,
                         'html': str(element)
                     }
-                    # Add text with newlines for visual separation
+                    
+                    # Insert text with tag for entire block
+                    block_start = self.text_display.index("end-1c")
                     self.text_display.insert(tk.END, text + "\n\n")
-    
+                    block_end = self.text_display.index("end-1c")
+                    
+                    # Add text block tag
+                    self.text_display.tag_add(f"block_{len(self.html_map)}", 
+                                            block_start, block_end)
+
     def handle_hover(self, event):
-        """Handle mouse hover over text with improved coordinate handling"""
+        """Handle hover with block tags"""
         index = self.text_display.index(f"@{event.x},{event.y}")
         
-        # Get block boundaries considering both X and Y coordinates
-        block_start = self.text_display.index(f"{index} linestart")
-        block_end = self.text_display.index(f"{index} lineend")
-        
-        # Get current block bbox (x1,y1,x2,y2)
         try:
-            bbox = self.text_display.bbox(index)
-            if not bbox:
-                return
+            # Get tags at current position
+            tags = self.text_display.tag_names(index)
+            block_tags = [t for t in tags if t.startswith('block_')]
             
-            x1, y1, width, height = bbox
-            x2 = x1 + width
-            
-            # Check if cursor is within text block boundaries
-            if (x1 <= event.x <= x2):
+            if block_tags:
+                block_start = self.text_display.index(f"{index} linestart")
+                block_end = self.text_display.index(f"{index} lineend")
                 text = self.text_display.get(block_start, block_end).strip()
                 
-                if text in self.html_map:
-                    # Remove previous highlight if different block
+                if text and text in self.html_map:
                     if self.current_hover_tag != text:
-                        if self.current_hover_tag:
-                            self.text_display.tag_remove("hover", "1.0", tk.END)
-                        
-                        # Add new highlight
+                        self._reset_hover()
                         self.text_display.tag_add("hover", block_start, block_end)
                         self.text_display.configure(cursor="hand2")
                         self.current_hover_tag = text
-                return
-                
-            # Reset if cursor outside any text block
-            if self.current_hover_tag:
-                self.text_display.tag_remove("hover", "1.0", tk.END)
-                self.text_display.configure(cursor="arrow")
-                self.current_hover_tag = None
+                    return
+                    
+            self._reset_hover()
                 
         except tk.TclError:
-            pass
+            self._reset_hover()
+
+    def _reset_hover(self):
+        """Helper to reset hover state"""
+        if self.current_hover_tag:
+            self.text_display.tag_remove("hover", "1.0", tk.END)
+            # cursor_spec = "@{}/arrow.xbm {}/arrow_mask.xbm black white".format(
+            #     self.cursor_path,
+            #     self.cursor_path
+            # )
+            # self.text_display.configure(cursor=cursor_spec)
+            self.text_display.configure(cursor="arrow")
+
+            self.current_hover_tag = None
 
     def handle_leave(self, event):
         """Reset cursor when mouse leaves text widget"""
         if self.current_hover_tag:
             self.text_display.tag_remove("hover", "1.0", tk.END)
-            self.text_display.configure(cursor="arrow")
+            cursor_spec = "@{}/arrow.xbm {}/arrow_mask.xbm black white".format(
+                self.cursor_path,
+                self.cursor_path
+            )
+            self.text_display.configure(cursor=cursor_spec)
             self.current_hover_tag = None
             
     def handle_click(self, event):
-        """Handle text selection with confirmation"""
+        """Handle text selection with expanded hit area"""
         try:
-            # Get selection if there is one
-            selected_text = self.text_display.get(tk.SEL_FIRST, tk.SEL_LAST).strip()
-            if selected_text and selected_text in self.html_map:
-                # Create confirmation dialog
-                confirm = messagebox.askyesno(
-                    "Confirm Selection",
-                    f"Add this {self.current_selection_type} example?\n\n"
-                    f"Text: {selected_text[:100]}...\n"
-                    f"HTML Tag: {self.html_map[selected_text]['tag']}\n"
-                    f"Classes: {', '.join(self.html_map[selected_text]['classes'])}"
-                )
+            index = self.text_display.index(f"@{event.x},{event.y}")
+            bbox = self.text_display.bbox(index)
+            
+            if not bbox:
+                return
                 
-                if confirm:
-                    # Convert HTML info to hashable format
-                    html_info = (
-                        self.html_map[selected_text]['tag'],
-                        tuple(self.html_map[selected_text]['classes']),
-                        self.html_map[selected_text]['id'],
-                        self.html_map[selected_text]['html']
-                    )
-                    # Store text and HTML info as a hashable tuple
-                    self.selected_tags[self.current_selection_type].add(
-                        (selected_text, html_info)
-                    )
-                    self.status_label.config(
-                        text=f"Added {self.html_map[selected_text]['tag']} "
-                            f"to {self.current_selection_type}"
+            x1, y1, width, height = bbox
+            x2 = x1 + width
+            y2 = y1 + height
+            
+            click_padding = 1
+            
+            if (x1 - click_padding <= event.x <= x2 + click_padding and 
+                y1 - click_padding <= event.y <= y2 + click_padding):
+                
+                line_start = self.text_display.index(f"{index} linestart")
+                line_end = self.text_display.index(f"{index} lineend")
+                text = self.text_display.get(line_start, line_end).strip()
+                
+                if text and text in self.html_map:
+                    # Format hierarchy text for display
+                    tag_hierarchy = self.html_map[text]['tag_hierarchy']
+                    hierarchy_text = '\n'.join(
+                        f"{'  '*i}{t['tag']}" +
+                        (f".{'.'.join(t['classes'])}" if t['classes'] else "") +
+                        (f"#{t['id']}" if t['id'] else "") +
+                        (f"[{','.join(f'{k}={v}' for k,v in t['attrs'].items())}]" if t['attrs'] else "")
+                        for i, t in enumerate(reversed(tag_hierarchy))
                     )
                     
+                    confirm = messagebox.askyesno(
+                        "Confirm Selection",
+                        f"Add this {self.current_selection_type} example?\n\n"
+                        f"Text: {text[:100]}...\n\n"
+                        f"Tag Hierarchy:\n{hierarchy_text}"
+                    )
+                    
+                    if confirm:
+                        # Convert dictionary to hashable format using tag_hierarchy
+                        html_info = tuple(
+                            (t['tag'],
+                            tuple(sorted(t['classes'])),
+                            t['id'],
+                            tuple((k, v) for k, v in sorted(t['attrs'].items())))
+                            for t in tag_hierarchy
+                        )
+                        
+                        self.selected_tags[self.current_selection_type].add((text, html_info))
+                        self.status_label.config(
+                            text=f"Added {tag_hierarchy[0]['tag']} to {self.current_selection_type}"
+                        )
+                        
         except tk.TclError:
-            # No selection
             pass
             
     def set_selection_type(self, selection_type: str):

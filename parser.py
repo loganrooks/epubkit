@@ -178,11 +178,12 @@ class EPUBTagSelector:
         """Reset cursor when mouse leaves text widget"""
         if self.current_hover_tag:
             self.text_display.tag_remove("hover", "1.0", tk.END)
-            cursor_spec = "@{}/arrow.xbm {}/arrow_mask.xbm black white".format(
-                self.cursor_path,
-                self.cursor_path
-            )
-            self.text_display.configure(cursor=cursor_spec)
+            # cursor_spec = "@{}/arrow.xbm {}/arrow_mask.xbm black white".format(
+            #     self.cursor_path,
+            #     self.cursor_path
+            # )
+            # self.text_display.configure(cursor=cursor_spec)
+            self.text_display.configure(cursor="arrow")
             self.current_hover_tag = None
             
     def handle_click(self, event):
@@ -278,9 +279,88 @@ class SelectionReviewDialog:
     def __init__(self, parent, selections):
         self.dialog = tk.Toplevel(parent)
         self.dialog.title("Review Selections")
-        self.dialog.geometry("600x400")
+        self.dialog.geometry("800x600")
         self.selections = selections
+        self.listboxes = {}  # Store listbox references
         self.setup_ui()
+        self.setup_keyboard_shortcuts()
+    
+    def setup_keyboard_shortcuts(self):
+        self.dialog.bind('<Delete>', self.handle_delete)
+        
+    def setup_ui(self):
+        notebook = ttk.Notebook(self.dialog)
+        notebook.pack(fill=tk.BOTH, expand=True)
+        
+        for category, items in self.selections.items():
+            frame = ttk.Frame(notebook)
+            notebook.add(frame, text=category.title())
+            
+            # Control frame for buttons
+            control_frame = ttk.Frame(frame)
+            control_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=5, pady=5)
+            
+            scrollbar = ttk.Scrollbar(frame)
+            scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+            
+            listbox = tk.Listbox(frame, yscrollcommand=scrollbar.set, 
+                               width=80, selectmode=tk.EXTENDED)
+            listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            self.listboxes[category] = listbox
+            
+            scrollbar.config(command=listbox.yview)
+            
+            for text, html_info in items:
+                hierarchy_text = self._format_hierarchy(html_info)
+                listbox.insert(tk.END, f"{text[:50]}...\n[{hierarchy_text}]\n")
+            
+            # Add buttons
+            ttk.Button(
+                control_frame,
+                text="Delete Selected (Del)",
+                command=lambda l=listbox, c=category: self.delete_selection(l, c)
+            ).pack(side=tk.LEFT, padx=5)
+            
+            ttk.Label(
+                control_frame,
+                text=f"Items: {listbox.size()}"
+            ).pack(side=tk.RIGHT, padx=5)
+        
+        ttk.Button(
+            self.dialog,
+            text="Confirm Selections",
+            command=self.dialog.destroy
+        ).pack(side=tk.BOTTOM, pady=10)
+
+    def handle_delete(self, event):
+        """Handle Delete key press"""
+        notebook = self.dialog.winfo_children()[0]
+        current_tab = notebook.select()
+        category = notebook.tab(current_tab)['text'].lower()
+        if category in self.listboxes:
+            self.delete_selection(self.listboxes[category], category)
+
+    def delete_selection(self, listbox, category):
+        """Delete selected items with confirmation"""
+        selection = listbox.curselection()
+        if not selection:
+            return
+            
+        count = len(selection)
+        if messagebox.askyesno(
+            "Confirm Deletion",
+            f"Delete {count} selected item{'s' if count > 1 else ''}?"
+        ):
+            # Convert to list and reverse sort to delete from bottom up
+            for idx in sorted(selection, reverse=True):
+                item = list(self.selections[category])[idx]
+                self.selections[category].remove(item)
+                listbox.delete(idx)
+            
+            # Update item count
+            listbox.master.winfo_children()[-1].config(
+                text=f"Items: {listbox.size()}"
+            )
 
     def _format_hierarchy(self, hierarchy_tuple):
         """Format hierarchy from tuple format"""
@@ -292,48 +372,6 @@ class SelectionReviewDialog:
             for tag, classes, id, attrs in reversed(hierarchy_tuple)
         )
         
-    def setup_ui(self):
-        notebook = ttk.Notebook(self.dialog)
-        notebook.pack(fill=tk.BOTH, expand=True)
-        
-        for category, items in self.selections.items():
-            frame = ttk.Frame(notebook)
-            notebook.add(frame, text=category.title())
-            
-            scrollbar = ttk.Scrollbar(frame)
-            scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-            
-            listbox = tk.Listbox(frame, yscrollcommand=scrollbar.set, width=80)
-            listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-            
-            scrollbar.config(command=listbox.yview)
-            
-            for text, html_info in items:
-                hierarchy_text = self._format_hierarchy(html_info)
-                listbox.insert(tk.END, f"{text[:50]}...\n[{hierarchy_text}]\n")
-                
-            # Add remove button
-            ttk.Button(
-                frame, 
-                text="Remove Selected",
-                command=lambda l=listbox, c=category: self._remove_item(l, c)
-            ).pack(side=tk.BOTTOM)
-            
-        ttk.Button(
-            self.dialog,
-            text="Confirm Selections",
-            command=self.dialog.destroy
-        ).pack(side=tk.BOTTOM, pady=10)
-    
-    
-    def _remove_item(self, listbox, category):
-        selection = listbox.curselection()
-        if selection:
-            idx = selection[0]
-            listbox.delete(idx)
-            item = list(self.selections[category])[idx]
-            self.selections[category].remove(item)
-
 if __name__ == "__main__":
     epub_file = "resources/epubs/Being and Time - Martin Heidegger.epub"
     selections = get_user_tag_examples(epub_file)

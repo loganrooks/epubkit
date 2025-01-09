@@ -1373,3 +1373,177 @@ if __name__ == "__main__":
     epub_file = "resources/epubs/Being and Time - Martin Heidegger.epub"
     selections = get_user_tag_examples(epub_file)
     print("User selections:", selections)
+
+@dataclass
+class TextBlock:
+    text: str
+    category: CategoryType
+    header_path: List[str] = field(default_factory=list)  # Tracks nested header hierarchy
+    footnotes: List[str] = field(default_factory=list)
+
+@dataclass
+class ExtractedText:
+    headers: List[TextBlock]
+    subheaders: List[TextBlock]
+    body: List[TextBlock]
+    footnotes: List[TextBlock]
+    toc: List[TextBlock]
+    
+    def save_to_file(self, output_path: Path) -> None:
+        """Save categorized text to files"""
+        output_path.mkdir(parents=True, exist_ok=True)
+        
+        # Save each category to separate file
+        for category in CATEGORIES:
+            blocks = getattr(self, category)
+            if blocks:
+                with open(output_path / f"{category}.txt", 'w', encoding='utf-8') as f:
+                    for block in blocks:
+                        f.write(f"{'#' * len(block.header_path)} {block.text}\n")
+                        if block.footnotes:
+                            f.write("\nFootnotes:\n")
+                            for note in block.footnotes:
+                                f.write(f"- {note}\n")
+                        f.write("\n---\n\n")
+
+def extract_categorized_text(epub_path: str, output_path: Optional[Path] = None) -> ExtractedText:
+    """Extract and categorize text from EPUB file"""
+    # Get user selections through GUI
+    selections = get_user_tag_examples(epub_path)
+    
+    # Initialize extractor
+    extractor = HTMLCategoryExtractor(selections)
+    
+    # Read EPUB file
+    book = epub.read_epub(epub_path)
+    extracted = ExtractedText([], [], [], [], [])
+    current_headers: List[str] = []
+    
+    # Process each HTML document
+    for item in book.get_items_of_type(ebooklib.ITEM_DOCUMENT):
+        content = item.get_content().decode('utf-8')
+        categories = extractor.extract_category(content)
+        
+        # Process headers first to maintain hierarchy
+        if categories['headers']:
+            for match in categories['headers']:
+                current_headers = [match['text']]  # Reset header stack for new main header
+                extracted.headers.append(TextBlock(
+                    text=match['text'],
+                    category='headers',
+                    header_path=current_headers.copy()
+                ))
+        
+        # Process subheaders
+        if categories['subheaders']:
+            for match in categories['subheaders']:
+                if current_headers:  # Only add if we have a parent header
+                    header_path = current_headers + [match['text']]
+                    extracted.subheaders.append(TextBlock(
+                        text=match['text'],
+                        category='subheaders',
+                        header_path=header_path
+                    ))
+        
+        # Process body text with current header context
+        if categories['body']:
+            for match in categories['body']:
+                extracted.body.append(TextBlock(
+                    text=match['text'],
+                    category='body',
+                    header_path=current_headers.copy()
+                ))
+        
+        # Process footnotes
+        if categories['footnotes']:
+            for match in categories['footnotes']:
+                extracted.footnotes.append(TextBlock(
+                    text=match['text'],
+                    category='footnotes'
+                ))
+    
+    # Save to files if output path provided
+    if output_path:
+        extracted.save_to_file(output_path)
+    
+    return extracted
+
+def extract_text_by_headers(
+    epub_path: str,
+    footnote_mode: Literal['ignore', 'inline', 'end'] = 'end',
+    output_path: Optional[Path] = None
+) -> Dict[str, str]:
+    """
+    Extract text organized by headers with configurable footnote handling
+    
+    Args:
+        epub_path: Path to EPUB file
+        footnote_mode: How to handle footnotes:
+            - 'ignore': Skip footnotes
+            - 'inline': Keep footnotes where they appear
+            - 'end': Collect footnotes at end of each section
+        output_path: Optional path to save organized text
+    
+    Returns:
+        Dictionary mapping header paths to their content
+    """
+    extracted = extract_categorized_text(epub_path)
+    organized_text: Dict[str, str] = {}
+    
+    # Group content by headers
+    for header in extracted.headers:
+        header_key = " > ".join(header.header_path)
+        content_parts = [header.text]
+        section_footnotes = []
+        
+        # Add subheaders and body text under this header
+        for subheader in extracted.subheaders:
+            if subheader.header_path[0] == header.text:
+                content_parts.append(f"\n## {subheader.text}\n")
+        
+        for body in extracted.body:
+            if body.header_path and body.header_path[0] == header.text:
+                if footnote_mode == 'inline':
+                    content_parts.append(body.text)
+                    if body.footnotes:
+                        content_parts.extend([f"\n[{i+1}] {note}" 
+                                           for i, note in enumerate(body.footnotes)])
+                else:
+                    content_parts.append(body.text)
+                    if body.footnotes:
+                        section_footnotes.extend(body.footnotes)
+        
+        # Add footnotes according to mode
+        if footnote_mode == 'end' and section_footnotes:
+            content_parts.append("\nFootnotes:")
+            content_parts.extend([f"\n[{i+1}] {note}" 
+                                for i, note in enumerate(section_footnotes)])
+        
+        organized_text[header_key] = "\n".join(content_parts)
+    
+    # Save to file if path provided
+    if output_path:
+        output_path.mkdir(parents=True, exist_ok=True)
+        with open(output_path / "organized_text.txt", 'w', encoding='utf-8') as f:
+            for header, content in organized_text.items():
+                f.write(f"# {header}\n\n{content}\n\n{'='*80}\n\n")
+    
+    return organized_text
+
+if __name__ == "__main__":
+    epub_file = "resources/epubs/Being and Time - Martin Heidegger.epub"
+    output_dir = Path("output")
+    
+    # Example 1: Extract all categorized text
+    print("Extracting categorized text...")
+    categorized = extract_categorized_text(epub_file, output_dir / "categorized")
+    
+    # Example 2: Extract text organized by headers with footnotes at the end
+    print("\nExtracting text by headers...")
+    organized = extract_text_by_headers(
+        epub_file,
+        footnote_mode='end',
+        output_path=output_dir / "by_headers"
+    )
+    
+    print("\nExtraction complete. Check the output directory for results.")

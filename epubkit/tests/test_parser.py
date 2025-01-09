@@ -13,7 +13,11 @@ from epubkit.parser import (
     CategoryDict,
     HTML,
     TagMatcher,
-    ConditionalRule
+    ConditionalRule,
+    TextBlock,
+    ExtractedText,
+    extract_categorized_text,
+    extract_text_by_headers
 )
 from typing import Dict, Set, Tuple, List
 
@@ -547,3 +551,177 @@ class TestHeideggerText:
         assert len(results['body']) == 1
         text = results['body'][0]['text']
         assert all(phrase in text for phrase in ["Text with", "italics", "bold", "both", "formatting"])
+
+
+class TestTextExtraction:
+    @pytest.fixture
+    def sample_extracted_text(self) -> ExtractedText:
+        return ExtractedText(
+            headers=[
+                TextBlock(
+                    text="Chapter 1: Introduction",
+                    category="headers",
+                    header_path=["Chapter 1: Introduction"]
+                ),
+                TextBlock(
+                    text="Chapter 2: Main Concepts",
+                    category="headers",
+                    header_path=["Chapter 2: Main Concepts"]
+                )
+            ],
+            subheaders=[
+                TextBlock(
+                    text="1.1 Background",
+                    category="subheaders",
+                    header_path=["Chapter 1: Introduction", "1.1 Background"]
+                ),
+                TextBlock(
+                    text="2.1 Core Ideas",
+                    category="subheaders",
+                    header_path=["Chapter 2: Main Concepts", "2.1 Core Ideas"]
+                )
+            ],
+            body=[
+                TextBlock(
+                    text="This is the introduction text.",
+                    category="body",
+                    header_path=["Chapter 1: Introduction"],
+                    footnotes=["First footnote"]
+                ),
+                TextBlock(
+                    text="Here are the main concepts.",
+                    category="body",
+                    header_path=["Chapter 2: Main Concepts"],
+                    footnotes=["Second footnote"]
+                )
+            ],
+            footnotes=[
+                TextBlock(
+                    text="First footnote",
+                    category="footnotes"
+                ),
+                TextBlock(
+                    text="Second footnote",
+                    category="footnotes"
+                )
+            ],
+            toc=[]
+        )
+
+    def test_save_extracted_text(self, sample_extracted_text, tmp_path):
+        """Test saving extracted text to files"""
+        output_dir = tmp_path / "test_output"
+        sample_extracted_text.save_to_file(output_dir)
+        
+        # Check that files were created
+        assert (output_dir / "headers.txt").exists()
+        assert (output_dir / "body.txt").exists()
+        assert (output_dir / "footnotes.txt").exists()
+        
+        # Verify content format
+        with open(output_dir / "headers.txt", 'r', encoding='utf-8') as f:
+            content = f.read()
+            assert "# Chapter 1: Introduction" in content
+            assert "# Chapter 2: Main Concepts" in content
+
+    def test_extract_text_by_headers_end_footnotes(self, sample_extracted_text, monkeypatch):
+        """Test extracting text organized by headers with footnotes at end"""
+        # Mock extract_categorized_text to return our sample data
+        monkeypatch.setattr(
+            "epubkit.parser.extract_categorized_text",
+            lambda *args: sample_extracted_text
+        )
+        
+        organized = extract_text_by_headers("dummy.epub", footnote_mode='end')
+        
+        assert "Chapter 1: Introduction" in organized
+        assert "Chapter 2: Main Concepts" in organized
+        
+        ch1_content = organized["Chapter 1: Introduction"]
+        assert "This is the introduction text." in ch1_content
+        assert "Footnotes:" in ch1_content
+        assert "[1] First footnote" in ch1_content
+
+    def test_extract_text_by_headers_inline_footnotes(self, sample_extracted_text, monkeypatch):
+        """Test extracting text with inline footnotes"""
+        monkeypatch.setattr(
+            "epubkit.parser.extract_categorized_text",
+            lambda *args: sample_extracted_text
+        )
+        
+        organized = extract_text_by_headers("dummy.epub", footnote_mode='inline')
+        
+        ch2_content = organized["Chapter 2: Main Concepts"]
+        assert "Here are the main concepts." in ch2_content
+        assert "[1] Second footnote" in ch2_content
+        assert "Footnotes:" not in ch2_content  # Should not have footnotes section
+
+    def test_extract_text_by_headers_ignore_footnotes(self, sample_extracted_text, monkeypatch):
+        """Test extracting text while ignoring footnotes"""
+        monkeypatch.setattr(
+            "epubkit.parser.extract_categorized_text",
+            lambda *args: sample_extracted_text
+        )
+        
+        organized = extract_text_by_headers("dummy.epub", footnote_mode='ignore')
+        
+        for content in organized.values():
+            assert "footnote" not in content.lower()
+            assert "[1]" not in content
+
+    def test_extract_text_by_headers_with_subheaders(self, sample_extracted_text, monkeypatch):
+        """Test that subheaders are properly nested under main headers"""
+        monkeypatch.setattr(
+            "epubkit.parser.extract_categorized_text",
+            lambda *args: sample_extracted_text
+        )
+        
+        organized = extract_text_by_headers("dummy.epub")
+        
+        ch1_content = organized["Chapter 1: Introduction"]
+        assert "## 1.1 Background" in ch1_content
+        
+        ch2_content = organized["Chapter 2: Main Concepts"]
+        assert "## 2.1 Core Ideas" in ch2_content
+
+    def test_saving_organized_text(self, sample_extracted_text, tmp_path, monkeypatch):
+        """Test saving organized text to file"""
+        monkeypatch.setattr(
+            "epubkit.parser.extract_categorized_text",
+            lambda *args: sample_extracted_text
+        )
+        
+        output_dir = tmp_path / "organized"
+        organized = extract_text_by_headers(
+            "dummy.epub",
+            output_path=output_dir
+        )
+        
+        # Check that file was created
+        output_file = output_dir / "organized_text.txt"
+        assert output_file.exists()
+        
+        # Verify content structure
+        with open(output_file, 'r', encoding='utf-8') as f:
+            content = f.read()
+            assert "# Chapter 1: Introduction" in content
+            assert "## 1.1 Background" in content
+            assert "=" * 80 in content  # Section separator
+            assert "Footnotes:" in content
+
+    def test_header_path_handling(self, sample_extracted_text, monkeypatch):
+        """Test proper handling of nested header paths"""
+        monkeypatch.setattr(
+            "epubkit.parser.extract_categorized_text",
+            lambda *args: sample_extracted_text
+        )
+        
+        organized = extract_text_by_headers("dummy.epub")
+        
+        # Headers should be used as keys
+        assert "Chapter 1: Introduction" in organized
+        assert "Chapter 2: Main Concepts" in organized
+        
+        # Content should be under correct headers
+        assert "This is the introduction text." in organized["Chapter 1: Introduction"]
+        assert "Here are the main concepts." in organized["Chapter 2: Main Concepts"]

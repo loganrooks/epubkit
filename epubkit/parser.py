@@ -1,5 +1,7 @@
 from __future__ import annotations
+import dataclasses
 from functools import  singledispatchmethod
+import logging
 import os
 import tkinter as tk
 from tkinter import ttk
@@ -810,30 +812,30 @@ class PatternReviewDialog:
         except re.error as e:
             results_widget.insert("1.0", f"Invalid pattern: {str(e)}\n")
 
-@dataclass(frozen=True)
-class CategoryPattern:
-    category: CategoryType
-    required_tags: List[Dict[str, Set[str]]] = field(default_factory=list)
-    excluded_tags: List[Dict[str, Set[str]]] = field(default_factory=list)
-    file_position_pattern: Optional[str] = None
+# @dataclass(frozen=True)
+# class CategoryPattern:
+#     category: CategoryType
+#     required_tags: List[Dict[str, Set[str]]] = field(default_factory=list)
+#     excluded_tags: List[Dict[str, Set[str]]] = field(default_factory=list)
+#     file_position_pattern: Optional[str] = None
 
-    def __post_init__(self) -> None:
-        if not self.required_tags and not self.file_position_pattern:
-            raise ValueError("Category pattern must have required tags or file position pattern")
+#     def __post_init__(self) -> None:
+#         if not self.required_tags and not self.file_position_pattern:
+#             raise ValueError("Category pattern must have required tags or file position pattern")
 
-    def to_dict(self) -> dict:
-        return {
-            'category': self.category,
-            'required_tags': [
-                {k: list(v) for k, v in tag.items()}
-                for tag in self.required_tags
-            ],
-            'excluded_tags': [
-                {k: list(v) for k, v in tag.items()}
-                for tag in self.excluded_tags
-            ],
-            'file_position_pattern': self.file_position_pattern
-        }
+#     def to_dict(self) -> dict:
+#         return {
+#             'category': self.category,
+#             'required_tags': [
+#                 {k: list(v) for k, v in tag.items()}
+#                 for tag in self.required_tags
+#             ],
+#             'excluded_tags': [
+#                 {k: list(v) for k, v in tag.items()}
+#                 for tag in self.excluded_tags
+#             ],
+#             'file_position_pattern': self.file_position_pattern
+#         }
 
 class CategoryExtractionError(Exception):
     """Raised when category extraction fails"""
@@ -861,135 +863,6 @@ class HTMLFormatter:
             immediate_tags.append((open_tag, close_tag))
         
         return list(reversed(immediate_tags))
-
-# class HTMLCategoryExtractor:
-#     def __init__(self, selections: CategoryDict[Tuple[str, Tuple[ImmutableTagInfo, ...]]]) -> None:
-#         self.selections = selections
-#         self.category_patterns: Dict[CategoryType, CategoryPattern] = self._build_category_patterns()
-
-    
-    
-#     def extract_category(self, html_content: str) -> CategoryDict[CategoryMatch]:
-#         try:
-#             soup = BeautifulSoup(html_content, 'html.parser')
-            
-#             # Check if the parsed HTML is valid
-#             if not soup.find():
-#                 raise CategoryExtractionError("Invalid HTML content")
-            
-#             results: CategoryDict[CategoryMatch] = {}
-            
-#             for category, pattern in self.category_patterns.items():
-#                 matches: List[CategoryMatch] = []
-#                 for req_tag in pattern.required_tags:
-#                     for tag_name, classes in req_tag.items():
-#                         selector = self._build_css_selector(tag_name, classes)
-#                         elements = soup.select(selector)
-                        
-#                         for element in elements:
-#                             if self._matches_pattern(element, pattern):
-#                                 matches.append({
-#                                     'text': element.get_text().strip(),
-#                                     'html': str(element)})               
-#                 results[category] = matches
-                
-#             return results
-            
-#         except Exception as e:
-#             raise CategoryExtractionError(f"Failed to extract categories: {str(e)}")
-        
-#     def _build_category_patterns(self) -> Dict[CategoryType, CategoryPattern]:
-#         """Build unique category patterns from selections"""
-#         patterns: Dict[CategoryType, CategoryPattern] = {}
-        
-#         for category in self.selections:
-#             required_tags: List[Dict[str, Set[str]]] = []
-#             excluded_tags: List[Dict[str, Set[str]]] = []
-#             file_position_pattern: Optional[str] = None
-
-#             if len(self.selections[category]) == 0:
-#                 continue
-
-#             # Analyze selections for this category
-#             for _, html_info in self.selections[category]:
-#                 tag_classes: Dict[str, Set[str]] = {}
-                
-#                 for tag in html_info:
-#                     if tag.classes:
-#                         if tag.tag not in tag_classes:
-#                             tag_classes[tag.tag] = set()
-#                         tag_classes[tag.tag].update(tag.classes)
-                    
-#                     if 'filepos' in tag.id:
-#                         file_position_pattern = r'filepos\d+'
-                
-#                 if tag_classes:
-#                     required_tags.append(tag_classes)
-            
-#             # Exclude patterns from other categories
-#             for other_cat, other_items in self.selections.items():
-#                 if len(other_items) == 0 or other_cat == category:
-#                     continue
-#                 else:
-#                     for _, other_info in other_items:
-#                         other_classes: Dict[str, Set[str]] = {}
-#                         for tag in other_info:
-#                             if tag.classes:
-#                                 other_classes[tag.tag] = set(tag.classes)
-#                         if other_classes:
-#                             excluded_tags.append(other_classes)
-            
-#             patterns[category] = CategoryPattern(
-#                 category=category,
-#                 required_tags=required_tags,
-#                 excluded_tags=excluded_tags,
-#                 file_position_pattern=file_position_pattern
-#             )
-            
-#         return patterns
-
-#     def _build_css_selector(self, tag: str, classes: Set[str]) -> str:
-#         """Build CSS selector from tag and classes"""
-#         selector = tag
-#         if classes:
-#             class_selectors = [f".{cls}" for cls in classes]
-#             selector += "".join(class_selectors)
-#         return selector
-
-#     def _matches_pattern(self, element: BeautifulSoup, pattern: CategoryPattern) -> bool:
-#         """Check if element matches category pattern"""
-#         # Check required tags
-#         for req_tag in pattern.required_tags:
-#             for tag_name, required_classes in req_tag.items():
-#                 matching_elements = element.find_all(tag_name)
-#                 if not matching_elements:
-#                     return False
-                    
-#                 found_match = False
-#                 for el in matching_elements:
-#                     el_classes = set(el.get('class', []))
-#                     if required_classes.issubset(el_classes):
-#                         found_match = True
-#                         break
-                
-#                 if not found_match:
-#                     return False
-        
-#         # Check excluded tags
-#         for excl_tag in pattern.excluded_tags:
-#             for tag_name, excluded_classes in excl_tag.items():
-#                 matching_elements = element.find_all(tag_name)
-#                 for el in matching_elements:
-#                     el_classes = set(el.get('class', []))
-#                     if excluded_classes.issubset(el_classes):
-#                         return False
-        
-#         # Check file position pattern if present
-#         if pattern.file_position_pattern:
-#             if not re.search(pattern.file_position_pattern, str(element)):
-#                 return False
-                
-#         return True
     
 
 
@@ -1001,39 +874,98 @@ class ConditionalRule:
     excluded_matchers: FrozenSet['TagMatcher'] = field(default_factory=frozenset)
 
 @dataclass(frozen=True)
-class MatchCriteria:
-    position_invariant: bool = False  # Child can be anywhere in hierarchy
+class PatternAnalysis:
+    """Analysis of common and unique patterns across examples"""
+    shared_structure: List[TagRequirement]  # Must have these
+    unique_features: List[TagRequirement]   # Distinguishing features
+    variable_parts: List[TagVariation]      # Parts that can vary
+    position_requirements: PositionRules     # Ordering constraints
+
+@dataclass(frozen=True)
+class TagRequirement:
+    """Individual tag matching requirement"""
+    tag: str
+    classes: FrozenSet[str]
+    id_pattern: Optional[str]
+    attrs: Tuple[Tuple[str, str], ...]
+    match_criteria: MatchCriteria = field(default_factory=lambda: MatchCriteria())
+    required: bool = True
+    position: Optional[int] = None 
+
+@dataclass(frozen=True)
+class TagVariation:
+    """Allowed variations in tag structure"""
+    tag_options: FrozenSet[str]
+    class_options: FrozenSet[FrozenSet[str]]
+    id_patterns: FrozenSet[str]
+    attr_patterns: FrozenSet[Tuple[str, str]]
+    min_depth: int = 0
+    max_depth: Optional[int] = None
+
+@dataclass(frozen=True)
+class AnalysisResult:
+    common_tags: List[TagRequirement]  # Tags found in all examples
+    unique_tags: List[TagRequirement]  # Tags that distinguish from other categories 
+    variable_parts: List[TagVariation]  # Parts that can vary between examples
+    ordering: Dict[str, List[int]]     # Required tag ordering/nesting
+
+# @dataclass(frozen=True)
+# class PositionRules:
+#     """Rules for tag positioning in hierarchy"""
+#     required_order: List[str]  # Tags must appear in this order
+#     max_depth: Optional[int] = None  # Maximum nesting depth
+#     depth_requirements: Dict[str, int] = field(default_factory=dict)  # Tag must be at specific depth
+#     relative_positions: Dict[str, Set[str]] = field(default_factory=dict)  # Tag A must be ancestor of Tag B
+
+# Step 2: Enhance PositionRules
+@dataclass(frozen=True)
+class PositionRules:
+    sequential_position: Optional[int] = None  # Position among siblings
+    required_order: List[str] = field(default_factory=list)
+    max_depth: Optional[int] = None
+    depth_requirements: Dict[str, int] = field(default_factory=dict)
+
+    def freeze(self):
+        # Convert lists to tuples
+        object.__setattr__(self, 'required_order', tuple(self.required_order))
+        return self
+    
+    def __hash__(self):
+        return hash((self.sequential_position, self.required_order, self.max_depth, 
+                     tuple(self.depth_requirements.items())))
 
 
 @dataclass(frozen=True)
+class MatchCriteria:
+    """How to match a tag in the hierarchy"""
+    depth_type: Literal['anywhere', 'exact_depth', 'relative_depth'] = 'anywhere'
+    depth: Optional[int] = None  # Used for exact_depth and relative_depth
+    position: Optional[int] = None  # Sequential position in tag list
+    must_be_direct_child: bool = False
+    position_invariant: bool = False  # Added position_invariant flag
+
+# Simplified TagMatcher focusing on core matching
+@dataclass(frozen=True)
 class TagMatcher:
-    """Defines criteria for matching a tag in the hierarchy"""
     tag: str
     classes: FrozenSet[str] = field(default_factory=frozenset)
     id_pattern: Optional[str] = None
     attrs: Tuple[Tuple[str, str], ...] = field(default_factory=tuple)
-    required_children: FrozenSet['TagMatcher'] = field(default_factory=frozenset)
-    excluded_children: FrozenSet['TagMatcher'] = field(default_factory=frozenset)
-    conditional_rules: Tuple[ConditionalRule, ...] = field(default_factory=tuple)
     match_criteria: MatchCriteria = field(default_factory=MatchCriteria)
+    position_rules: Optional[PositionRules] = None
 
     def freeze(self):
-        # Convert any sets to frozensets
+        # Convert any sets to frozensets and lists to tuples
         object.__setattr__(self, 'classes', frozenset(self.classes))
-        object.__setattr__(self, 'required_children', frozenset(self.required_children))
-        object.__setattr__(self, 'excluded_children', frozenset(self.excluded_children))
-        object.__setattr__(self, 'conditional_rules', tuple(self.conditional_rules))
         object.__setattr__(self, 'attrs', tuple(sorted(self.attrs)))
+        self.position_rules.freeze()
         return self
     
     
     def unfreeze(self):
-        # Convert any frozensets back to sets
+        # Convert any frozensets back to sets and tuples back to lists
         object.__setattr__(self, 'classes', set(self.classes))
-        object.__setattr__(self, 'required_children', set(self.required_children))
-        object.__setattr__(self, 'excluded_children', set(self.excluded_children))
-        object.__setattr__(self, 'conditional_rules', tuple(self.conditional_rules))
-        object.__setattr__(self, 'attrs', tuple(sorted(self.attrs)))
+        object.__setattr__(self, 'attrs', list(sorted(self.attrs)))
         return self
 
 
@@ -1043,6 +975,8 @@ class CategoryPattern:
     root_matchers: Set[TagMatcher]
     global_excluded: Set[TagMatcher] = field(default_factory=set)
     file_position_pattern: Optional[str] = None
+    variations: List[TagVariation] = field(default_factory=list)
+
 
     def __post_init__(self) -> None:
         if not self.root_matchers and not self.file_position_pattern:
@@ -1059,6 +993,7 @@ class CategoryPattern:
         object.__setattr__(self, 'root_matchers', set(self.root_matchers))
         object.__setattr__(self, 'global_excluded', set(self.global_excluded))
         return self
+        return self
 
 @dataclass(frozen=True)
 class ParentSpec:
@@ -1072,7 +1007,43 @@ class ParentSpec:
 class HTMLCategoryExtractor:
     def __init__(self, selections: CategoryDict[Tuple[str, Tuple[ImmutableTagInfo, ...]]]) -> None:
         self.selections = selections
+        self._validate_selections()
+        self.analyses: Dict[CategoryType, AnalysisResult] = {}
+
         self.category_patterns: Dict[CategoryType, CategoryPattern] = self._build_category_patterns()
+
+    def _validate_selections(self) -> None:
+        """Validate selections dictionary has required structure"""
+        if not isinstance(self.selections, dict):
+            raise ValueError("Selections must be a dictionary")
+            
+        # Check categories
+        for category in self.selections:
+            if category not in CATEGORIES:
+                raise ValueError(f"Invalid category: {category}")
+                
+        # Check selection content structure
+        for category, items in self.selections.items():
+            if not isinstance(items, (list, tuple)):
+                raise ValueError(f"Category {category} must contain a list/tuple")
+                
+            for item in items:
+                if not isinstance(item, tuple) or len(item) != 2:
+                    raise ValueError(f"Invalid selection format in {category}")
+                text, tag_info = item
+                if not isinstance(text, str):
+                    raise ValueError(f"Selection text must be string in {category}")
+                if not isinstance(tag_info, tuple):
+                    raise ValueError(f"Tag info must be tuple in {category}")
+                
+    def _validate_matcher(self, matcher: TagMatcher) -> None:
+        """Validate matcher configuration"""
+        if matcher.match_criteria.depth_type != 'anywhere':
+            if matcher.match_criteria.depth is None:
+                raise ValueError("Depth required for position-specific matching")
+                
+        if matcher.position is not None and matcher.position < 0:
+            raise ValueError("Position must be non-negative")
 
     def extract_category(self, html_content: str) -> CategoryDict[CategoryMatch]:
         if len(html_content) == 0:
@@ -1104,20 +1075,223 @@ class HTMLCategoryExtractor:
             raise CategoryExtractionError(f"Failed to extract categories: {str(e)}")
 
     def _matches_pattern(self, element: BeautifulSoup, pattern: CategoryPattern) -> bool:
-        """Check if element's complete hierarchy matches the pattern"""
-        # Check file position pattern first
-        if pattern.file_position_pattern:
-            if not re.search(pattern.file_position_pattern, str(element)):
-                return False
-            
-        tag_hierarchy = self._build_tag_hierarchy(element)
-    
+        """Check if element matches category pattern"""
+        # Check matchers (includes position/depth rules)
         
-        # Check if any root matcher matches the hierarchy
-        return any(
-            self._matches_hierarchy(tag_hierarchy, root_matcher, pattern.global_excluded)
-            for root_matcher in pattern.root_matchers
-        )
+        for matcher in pattern.root_matchers:
+            if not self._matches_tag(element, matcher):
+                return False
+                
+            # Check position rules
+            if matcher.position_rules:
+                if not self._check_position_rules(element, matcher.position_rules):
+                    return False
+
+        # Check excluded patterns
+        for matcher in pattern.global_excluded:
+            if self._matches_tag(element, matcher):
+                return False
+                
+        return True
+        
+    def _matches_tag_requirement(self, element: BeautifulSoup, req: TagRequirement) -> bool:
+        """Check if element matches tag requirement"""
+        # Handle position invariance
+        match req.match_criteria.depth_type:
+            case 'anywhere':
+                # Search whole subtree
+                return self._find_matching_tag_anywhere(element, req)
+                
+            case 'exact_depth':
+                # Must be at specific depth from root
+                return self._find_matching_tag_at_depth(element, req.match_criteria.depth)
+                
+            case 'relative_depth':
+                # Must be N levels below current element
+                return self._find_matching_tag_relative(element, req.match_criteria.depth)
+        
+    def _check_position_rules(self, element: bs4.Tag, rules: PositionRules) -> bool:
+        # Check sequential position
+        if rules.sequential_position is not None:
+            siblings = list(element.parent.children if element.parent else [])
+            if siblings.index(element) != rules.sequential_position:
+                return False
+
+        # Check depth requirements
+        for tag, depth in rules.depth_requirements.items():
+            if not self._verify_tag_depth(element, tag, depth):
+                return False
+
+        # Check tag ordering
+        return self._verify_tag_order(element, rules.required_order)
+    
+    # def _find_matching_tag_anywhere(self, element: BeautifulSoup, req: TagRequirement) -> bool:
+    #     """Find tag matching requirement anywhere in subtree"""
+    #     if self._matches_basic_criteria(element, req):
+    #         return True
+            
+    #     for child in element.find_all():
+    #         if self._matches_basic_criteria(child, req):
+    #             return True
+    #     return False
+
+    def _find_matching_tag_anywhere(self, element: BeautifulSoup, req: TagRequirement) -> bool:
+        """Find tag matching requirement anywhere in tree with branch support"""
+        MAX_DEPTH = 30
+        visited = set()
+        queue = [(element, 0)]  # (element, depth)
+        
+        while queue:
+            current, depth = queue.pop(0)
+            if depth > MAX_DEPTH:
+                continue
+                
+            if id(current) in visited:
+                continue
+            visited.add(id(current))
+                
+            if self._matches_basic_criteria(current, req):
+                return True
+                
+            # Add all children to queue regardless of nesting
+            for child in current.find_all(recursive=False):
+                queue.append((child, depth + 1))
+                
+        return False
+    
+    # def _find_matching_tag_anywhere(self, element: BeautifulSoup, req: TagRequirement) -> bool:
+    #     """Find tag matching requirement anywhere in subtree with depth limit"""
+    #     MAX_DEPTH = 100
+        
+    #     def search(el: BeautifulSoup, depth: int = 0) -> bool:
+    #         if depth > MAX_DEPTH:
+    #             return False
+                
+    #         if self._matches_basic_criteria(el, req):
+    #             return True
+                
+    #         for child in el.children:
+    #             if isinstance(child, bs4.Tag):
+    #                 if search(child, depth + 1):
+    #                     return True
+    #         return False
+            
+    #     return search(element)
+        
+    def _find_matching_tag_at_depth(self, element: bs4.Tag, depth: int) -> bool:
+        """Find tag at specific depth from root"""
+        if depth is None:
+            return True  # No depth requirement
+            
+        current_depth = 0
+        current = element
+        while current and current.parent:
+            if current_depth == depth:
+                return True
+            current = current.parent
+            current_depth += 1
+        return False
+        
+    def _find_matching_tag_relative(self, element: BeautifulSoup, depth: int) -> bool:
+        """Find tag at relative depth from current element"""
+        current_depth = 0
+        current = element
+        for _ in range(depth):
+            if not current.find_next():
+                return False
+            current = current.find_next()
+            current_depth += 1
+        return True
+    
+    def _verify_depth(self, element: BeautifulSoup, required_depth: int) -> bool:
+        """Verify element is at required depth from root"""
+        current_depth = 0
+        current = element
+        
+        while current.parent:
+            current = current.parent
+            current_depth += 1
+            
+        return current_depth == required_depth
+
+    def _get_depth(self, element: BeautifulSoup) -> int:
+        """Get element depth handling broken nesting"""
+        depth = 0
+        visited = set()
+        current = element
+        
+        while current and current.parent:
+            if id(current) in visited:  # Detect cycles
+                logging.warning(f"Circular parent reference detected at {current}")
+                break
+            visited.add(id(current))
+            
+            # Check if parent is still in scope
+            if current.parent.find(current.name) != current:
+                break
+                
+            depth += 1
+            current = current.parent
+            
+        return depth
+        
+    def _matches_basic_criteria(self, element: BeautifulSoup, req: TagRequirement) -> bool:
+        """Check basic tag criteria (tag, classes, id, attrs)"""
+        if element.name != req.tag:
+            return False
+            
+        element_classes = set(element.get('class', []))
+        if req.classes and not req.classes.issubset(element_classes):
+            return False
+            
+        element_id = element.get('id', '')
+        if req.id_pattern and not re.match(req.id_pattern, element_id or ''):
+            return False
+            
+        if req.attrs and not all(
+            element.get(k) == v for k, v in req.attrs
+        ):
+            return False
+            
+        return True
+
+    def _verify_tag_order(self, element: BeautifulSoup, required_order: List[str]) -> bool:
+        """Verify tags appear in order handling broken nesting"""
+        order_idx = 0
+        visited = set()
+        queue = [element]
+        
+        while queue and order_idx < len(required_order):
+            current = queue.pop(0)
+            
+            if id(current) in visited:
+                continue
+            visited.add(id(current))
+            
+            if current.name == required_order[order_idx]:
+                order_idx += 1
+                
+            # Add siblings and children
+            queue.extend(current.find_next_siblings())
+            queue.extend(current.find_all(recursive=False))
+            
+        return order_idx == len(required_order)
+        
+    def _verify_tag_depth(self, element: BeautifulSoup, tag: str, required_depth: int) -> bool:
+        """Verify tag exists at required depth"""
+        current_depth = 0
+        current = element
+        
+        while current and current.parent and current != current.parent:
+            if current_depth == required_depth and current.name == tag:
+                return True
+            current = current.parent
+            current_depth += 1
+        
+        if current == current.parent:
+            logging.warning(f"Element {element} is its own parent")
+
+        return False
     
     def _build_css_selector(self, tag: str, classes: Set[str]) -> str:
         """Build CSS selector from tag and classes"""
@@ -1127,168 +1301,209 @@ class HTMLCategoryExtractor:
             selector += "".join(class_selectors)
         return selector
 
-    def _build_tag_hierarchy(self, root_element: BeautifulSoup, root_matcher: TagMatcher | None = None) -> Dict[str, Any]:
-        """Convert BeautifulSoup element to tag hierarchy dict, starting from root matcher if it exists in hierarchy"""
-        
-        result = {
-            'tag': root_element.name,
-            'classes': set(root_element.get('class', [])),
-            'id': root_element.get('id', ''),
-            'attrs': {k:v for k,v in root_element.attrs.items() 
-                     if k not in ['class', 'id']},
-            'children': []
-        }
-        
-        for child in root_element.children:
-            if isinstance(child, bs4.Tag):
-                result['children'].append(self._build_tag_hierarchy(child))
-                
-        return result
-
-    def _matches_hierarchy(
-        self, 
-        hierarchy: Dict[str, Any], 
-        matcher: TagMatcher,
-        global_excluded: Set[TagMatcher]
-    ) -> bool:
-        """Recursively check if hierarchy matches the matcher pattern"""
-        # Check if hierarchy matches any globally excluded patterns
-        if any(self._matches_tag(hierarchy, excl) for excl in global_excluded):
-            return False
-        hierarchy_root = hierarchy['tag']
-        # Check if current tag matches basic criteria
-        if not self._matches_tag(hierarchy, matcher) and not matcher.match_criteria.position_invariant:
-            return False
-            
-        # Check conditional rules
-        for rule in matcher.conditional_rules:
-            if self._matches_tag(hierarchy, rule.condition_matcher):
-                # If condition matches, check required/excluded patterns
-                if not all(
-                    any(self._matches_hierarchy(child, req, global_excluded) 
-                        for child in hierarchy['children'])
-                    for req in rule.required_matchers
-                ):
-                    return False
-                    
-                if any(
-                    any(self._matches_hierarchy(child, excl, global_excluded)
-                        for child in hierarchy['children'])
-                    for excl in rule.excluded_matchers
-                ):
-                    return False
-
-        # Check required children
-        if matcher.required_children:
-            for req in matcher.required_children:
-                if not any(self._matches_hierarchy(child, req, global_excluded) for child in hierarchy['children']):
-                    return False
-
-        # Check excluded children
-        if matcher.excluded_children:
-            for excl in matcher.excluded_children:
-                if any(self._matches_hierarchy(child, excl, global_excluded) for child in hierarchy['children']):
-                    return False
-            
-        return True
-    
-    @singledispatchmethod
-    def _matches_tag(self, hierarchy: Any, matcher: TagMatcher) -> bool:
-        """Default implementation returns False for unknown types"""
-        return False
-    
-    @_matches_tag.register
-    def _(self, hierarchy: dict, matcher: TagMatcher) -> bool:
-        """Match against dictionary representation of tag"""
-        if hierarchy['tag'] != matcher.tag:
-            return False
-            
-        if matcher.classes and not matcher.classes.issubset(hierarchy['classes']):
-            return False
-            
-        if matcher.id_pattern and not re.match(matcher.id_pattern, hierarchy['id'] or ''):
-            return False
-            
-        if matcher.attrs and not all(
-            hierarchy['attrs'].get(k) == v for k, v in matcher.attrs
-        ):
-            return False
-            
-        return True
-    
-    @_matches_tag.register
-    def _(self, hierarchy: bs4.Tag, matcher: TagMatcher) -> bool:
+    def _matches_tag(self, element: BeautifulSoup, matcher: TagMatcher) -> bool:
         """Match against BeautifulSoup Tag"""
-        if hierarchy.name != matcher.tag:
+        if not self._matches_basic_criteria(element, matcher):
             return False
             
-        element_classes = set(hierarchy.get('class', []))
-        if matcher.classes and not matcher.classes.issubset(element_classes):
-            return False
-            
-        element_id = hierarchy.get('id', '')
-        if matcher.id_pattern and not re.match(matcher.id_pattern, element_id or ''):
-            return False
-            
-        if matcher.attrs and not all(
-            hierarchy.get(k) == v for (k, v) in matcher.attrs
-        ):
-            return False
-            
+        # Check match_criteria position and depth
+        criteria = matcher.match_criteria
+        
+        # Check sequential position if specified
+        if criteria.position is not None:
+            siblings = list(element.parent.children)
+            if siblings.index(element) != criteria.position:
+                return False
+                
+        # Check depth requirements
+        if criteria.depth is not None:
+            if not self._verify_tag_depth(element, matcher.tag, criteria.depth):
+                return False
+                
         return True
 
     def _build_category_patterns(self) -> Dict[CategoryType, CategoryPattern]:
-        """Build category patterns from selections"""
-        patterns: Dict[CategoryType, CategoryPattern] = {}
-        
-        for category in self.selections:
-            if len(self.selections[category]) == 0:
+        patterns = {}
+        for category, examples in self.selections.items():
+            if not examples:
                 continue
 
-            # Build root matchers for this category
-            root_matchers: Set[TagMatcher] = set()
-            global_excluded: Set[TagMatcher] = set()
+            
+            common_tags=self._find_shared_structure(examples)
+            unique_tags=self._find_distinguishing_features(category, shared=common_tags)
+            variable_parts=self._identify_variations(examples, shared=common_tags)
+            ordering=self._analyze_tag_ordering(examples)
 
-            # Analyze selections for each category
-            for _, html_info in self.selections[category]:
-                # Build complete tag hierarchy matcher
-                root_matcher = self._build_matcher_from_tag_info(html_info)
-                if isinstance(root_matcher, TagMatcher):
-                    root_matchers.add(root_matcher.freeze())
 
-            # Build excluded patterns only from categories with distinct structures
-            for other_cat, other_items in self.selections.items():
-                if len(other_items) == 0 or other_cat == category:
-                    continue
-                    
-                for _, other_info in other_items:
-                    # Check if structures are truly distinct before adding to excluded
-                    other_matcher = self._build_matcher_from_tag_info(other_info)
-                    if isinstance(other_matcher, TagMatcher):
-                        # Only exclude if the structure is different
-                        is_distinct = True
-                        for root_matcher in root_matchers:
-                            if (other_matcher.tag == root_matcher.tag and
-                                other_matcher.classes == root_matcher.classes):
-                                # Check child structure
-                                if (set(other_matcher.required_children) == 
-                                    set(root_matcher.required_children)):
-                                    is_distinct = False
-                                    break
-                        if is_distinct:
-                            global_excluded.add(other_matcher.freeze())
+            # Create analysis result
+            analysis = AnalysisResult(
+                common_tags=common_tags,
+                unique_tags=unique_tags,
+                variable_parts=variable_parts,
+                ordering=ordering
+            )
+            self.analyses[category] = analysis
 
+            # Build matchers from analysis
+            root_matchers = set()
+            for req in (analysis.common_tags + analysis.unique_tags):
+                matcher = TagMatcher(
+                    tag=req.tag,
+                    classes=req.classes,
+                    id_pattern=req.id_pattern,
+                    attrs=req.attrs,
+                    match_criteria=MatchCriteria(
+                        depth_type='exact_depth',
+                        depth=analysis.ordering.get(req.tag, [0])[0]
+                    ),
+                    position_rules=PositionRules(
+                        sequential_position=req.position,
+                        depth_requirements={
+                            req.tag: analysis.ordering[req.tag][0]
+                        }
+                    )
+                )
+                root_matchers.add(matcher.freeze())
+                
             patterns[category] = CategoryPattern(
                 category=category,
-                root_matchers=root_matchers,
-                global_excluded=global_excluded,
-                file_position_pattern=(
-                    r'filepos\d+' if any('filepos' in tag.id for tag in html_info)
-                    else None
-                )
-            ).freeze()
+                root_matchers=frozenset(root_matchers)
+            )
 
         return patterns
+
+    def _find_shared_structure(
+    self,
+    examples: List[Tuple[str, Tuple[ImmutableTagInfo, ...]]]
+) -> List[TagRequirement]:
+        """Find common tag patterns across all examples"""
+        shared = []
+
+        if not examples:
+            return shared
+            
+        baseline = examples[0][1]
+        
+        for i, tag in enumerate(baseline):
+            is_shared = True  # Initialize flag here
+            
+            req = TagRequirement(
+                tag=tag.tag,
+                classes=frozenset(tag.classes),
+                id_pattern=tag.id if 'filepos' in tag.id else None,
+                attrs=tag.attrs,
+                position=i,  # Store sequential position
+                match_criteria=MatchCriteria(
+                    depth_type='exact_depth',
+                    depth=i  # Store nesting depth in match criteria
+                )
+            )
+            
+            # Verify tag appears in same position in all examples
+            for _, other_tags in examples[1:]:
+                if i >= len(other_tags):
+                    is_shared = False
+                    break
+                other = other_tags[i]
+                if not (
+                    other.tag == tag.tag and
+                    set(other.classes) == set(tag.classes)
+                ):
+                    is_shared = False
+                    break
+                    
+            if is_shared:
+                shared.append(req)
+                
+        return shared
+
+    def _find_distinguishing_features(
+        self,
+        category: CategoryType,
+        shared: List[TagRequirement]
+    ) -> List[TagRequirement]:
+        """Find patterns unique to this category"""
+        distinguishing = []
+        
+        # Compare against other categories
+        for other_cat, other_items in self.selections.items():
+            if other_cat == category or not other_items:
+                continue
+                
+            # Find tags/classes unique to this category
+            for req in shared:
+                is_unique = True
+                for _, other_tags in other_items:
+                    for other in other_tags:
+                        if (
+                            other.tag == req.tag and
+                            other.classes == req.classes
+                        ):
+                            is_unique = False
+                            break
+                    if not is_unique:
+                        break
+                        
+                if is_unique:
+                    distinguishing.append(req)
+                    
+        return distinguishing
+
+    def _identify_variations(
+        self,
+        examples: List[Tuple[str, Tuple[ImmutableTagInfo, ...]]],
+        shared: List[TagRequirement]
+    ) -> List[TagVariation]:
+        """Find allowed variations in tag structure"""
+        variations = []
+    
+        # Track varying tag positions
+        varying_positions = {}
+        
+        # Compare each example against shared structure
+        for _, tags in examples:
+            for i, tag in enumerate(tags):
+                # Check if position is already covered by shared structure
+                if any(s.position == i for s in shared):  # Changed from s.depth to s.position
+                    continue
+                    
+                if i not in varying_positions:
+                    varying_positions[i] = {
+                        'tags': set(),
+                        'classes': set(), 
+                        'ids': set()
+                    }
+                    
+                varying_positions[i]['tags'].add(tag.tag)
+                varying_positions[i]['classes'].update(tag.classes)
+                if tag.id:
+                    varying_positions[i]['ids'].add(tag.id)
+                    
+        # Create variations for varying positions
+        for depth, variants in varying_positions.items():
+            variations.append(TagVariation(
+                tag_options=frozenset(variants['tags']),
+                class_options=frozenset(map(frozenset, variants['classes'])),
+                id_patterns=frozenset(variants['ids']),
+                attr_patterns=frozenset(),
+                min_depth=depth,
+                max_depth=depth
+            ))
+            
+        return variations
+    
+    def _analyze_tag_ordering(
+        self,
+        examples: List[Tuple[str, Tuple[ImmutableTagInfo, ...]]]
+    ) -> Dict[str, List[int]]:
+        """Analyze where tags appear in hierarchy"""
+        ordering = {}
+        for _, tags in examples:
+            for i, tag_info in enumerate(tags):
+                if tag_info.tag not in ordering:
+                    ordering[tag_info.tag] = []
+                ordering[tag_info.tag].append(i)
+        return ordering
 
     def _build_matcher_from_tag_info(
         self,

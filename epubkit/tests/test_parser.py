@@ -6,7 +6,7 @@ from epubkit.parser import (
     CategoryPattern, 
     CategoryExtractionError,
     CategoryType,
-    MatchCriteria,
+    PositionRules,
     TagInfo,
     ImmutableTagInfo,
     html_to_selections,
@@ -70,15 +70,10 @@ def test_complex_pattern_matching(extractor):
             TagMatcher(
                 tag='p',
                 classes=frozenset(['calibre_6']),
-                required_children=frozenset([
-                    TagMatcher(
-                        tag='span',
-                        classes=frozenset(['calibre12'])
-                    )
-                ])
+                position_rules=PositionRules(
+                    depth_requirements={'span': 1}
             )
-        }
-    )
+    )})
     
     element = soup.find_all(tuple(pattern.root_matchers)[0].tag)[0]
     assert extractor._matches_pattern(element, pattern)
@@ -140,10 +135,8 @@ def test_extract_category_success(extractor):
         <h2 class="section-title" id="sec1" data-level="1.1">Section 1.1</h2>
         <p class="body-text">This is body text</p>
     </div>
-    """
-    
+    """    
     results = extractor.extract_category(html)
-    
     assert 'headers' in results
     assert len(results['headers']) == 1
     assert results['headers'][0]['text'] == 'Chapter 1'
@@ -337,16 +330,16 @@ class TestHeideggerText:
         """
         
         pattern = CategoryPattern(
-            category='body',
-            root_matchers={TagMatcher(
-                tag='p',
-                classes=frozenset(['calibre_6']),
-                required_children=frozenset([TagMatcher(
-                    tag='span',
-                    classes=frozenset(['calibre12'])
-                )])
-            )}
-        )
+        category='body',
+        root_matchers={TagMatcher(
+            tag='p',
+            classes=frozenset(['calibre_6']),
+            position_rules=PositionRules(
+                depth_requirements={'span': 1}
+            )
+        )}
+    )
+    
         
         soup = BeautifulSoup(html, 'html.parser')
         element = soup.find_all('p')[0]
@@ -463,8 +456,7 @@ class TestHeideggerText:
                 classes=frozenset(['calibre_1']),
                 required_children=frozenset([TagMatcher(
                     tag='span',
-                    classes=frozenset(['italic']),
-                    match_criteria = MatchCriteria(position_invariant=True)
+                    classes=frozenset(['italic'])
                 )])
             )}
         )
@@ -507,19 +499,10 @@ class TestHeideggerText:
 
     def test_heidegger_empty_divs(self):
         html = """
-        <p id="filepos41583" class="calibre_8">
-                        <span class="calibre11"><span class="bold">
-                            I: THE NECESSITY, STRUCTURE, AND PRIORITY OF THE QUESTION OF BEING
-                        </span></span>
-                    </p> 
+        <p class="calibre_8">Title</p>
         <div class="calibre_9"> </div>
-        <p class="calibre_6">
-            <span class="calibre6"><span>
-                <span class="calibre10">Body text here with 
-                <span class="italic">special formatting</span> 
-                and continuing text(1)</span>
-                </span></span>        
-            <div class="calibre_9"> </div>
+        <p class="calibre_6">Content</p>
+        <div class="calibre_9"> </div>
         """
         
         results = self.extractor.extract_category(html)

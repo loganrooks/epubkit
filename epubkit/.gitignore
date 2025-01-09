@@ -1,5 +1,7 @@
 # epubs
-resources/epubs/
+resources/epubs/*
+resources/images/*
+resources/music/*
 
 # logs
 logs/

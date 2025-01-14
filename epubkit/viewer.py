@@ -662,6 +662,57 @@ class VaporwaveDesktop(tk.Toplevel):
         y = widget.winfo_y() + event.winfo_y() - widget._drag_start_y
         widget.place(x=x, y=y)
 
+class ProcessWrapper:
+    """Wrapper for long-running processes with progress UI"""
+    def __init__(self, parent, title="ショリチュウ PROCESSING"):
+        self.parent = parent
+        self.title = title
+
+    def __call__(self, func):
+        def wrapped(*args, **kwargs):
+            # Create progress dialog
+            progress = RetroProgressDialog(self.parent, self.title)
+            progress.pack_dialog()
+            progress.update()
+            
+            try:
+                # Run process in background
+                def background():
+                    try:
+                        result = func(*args, **kwargs)
+                        # Clean up and return result on success
+                        self.parent.after(0, lambda: self._finish(progress, result))
+                    except Exception as e:
+                        # Handle error
+                        self.parent.after(0, lambda: self._handle_error(progress, e))
+                
+                # Start background thread
+                thread = threading.Thread(target=background)
+                thread.daemon = True
+                thread.start()
+                
+            except Exception as e:
+                progress.destroy()
+                messagebox.showerror(
+                    ViewerText.TITLES["error"],
+                    f"{ViewerText.MESSAGES['process_error']}: {str(e)}"
+                )
+                return None
+                
+        return wrapped
+        
+    def _finish(self, progress, result):
+        """Clean up on success"""
+        progress.destroy()
+        return result
+        
+    def _handle_error(self, progress, error):
+        """Handle process error"""
+        progress.destroy()
+        messagebox.showerror(
+            ViewerText.TITLES["error"],
+            f"{ViewerText.MESSAGES['process_error']}: {str(error)}"
+        )
 
 class SearchToolbar(ttk.Frame):
     """Enhanced search toolbar with live suggestions"""

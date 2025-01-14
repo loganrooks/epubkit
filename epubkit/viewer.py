@@ -1884,25 +1884,21 @@ def create_test_gif():
 
 def run_mock_viewer():
     """Run the viewer with mock data for testing"""
+    SCREEN_WIDTH = 1920
+    SCREEN_HEIGHT = 1080    
+    SCREEN_X_OFFSET = 1080
+    SCREEN_Y_OFFSET = 840
     root = tk.Tk()
     root.withdraw()  # Hide the root window
-    
+
     # Create resources folders if they don't exist
-    for folder in ['desktops', 'gifs', 'music']:
+    for folder in ['backgrounds', 'gifs', 'music']:
         path = Path('resources') / folder
         path.mkdir(parents=True, exist_ok=True)
     
-    # Check if we have a background image, if not create a simple one
-    bg_path = Path('resources/desktops/windows-xp.jpg')
-    if not bg_path.exists():
-        from PIL import Image
-        img = Image.new('RGB', (1920, 1080), '#000066')
-        img.save(bg_path)
-    
-    # Create desktop and viewer windows
     desktop = VaporwaveDesktop()
     viewer = TextSearchViewer(desktop, MockSearch())
-    
+    viewer.lift()    
     root.mainloop()
 
 if __name__ == "__main__":

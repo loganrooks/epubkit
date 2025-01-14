@@ -959,7 +959,7 @@ class CollectionPanel(ttk.Frame):
             
     def export_collections(self):
         """Export collections to JSON"""
-        path = tk.filedialog.asksaveasfilename(
+        path = filedialog.asksaveasfilename(
             defaultextension=".json",
             filetypes=[("JSON files", "*.json")]
         )

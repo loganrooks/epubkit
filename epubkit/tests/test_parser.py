@@ -879,3 +879,109 @@ def test_pattern_review_category_conflicts():
 
 
 
+from bs4 import BeautifulSoup
+import pytest
+from epubkit.parser import extract_supervised_patterns, extract_unsupervised_patterns
+from epubkit.utils import debug_print_dict, load_epub_html
+
+def create_test_tag(html_str):
+    """Helper to convert HTML string to BS4 tag"""
+    return BeautifulSoup(html_str, 'html.parser').find()
+
+def test_supervised_pattern_extraction():
+    # Test data structure
+    labeled_selections = {
+        'headers': [create_test_tag(p) for p in ["""
+            <p id="filepos41583" class="calibre_8">
+                <span class="calibre11"><span class="bold">
+                    I: THE NECESSITY, STRUCTURE, AND PRIORITY OF THE QUESTION OF BEING
+                </span></span>
+            </p>
+        """, """<p class="calibre_8">
+                <span class="calibre6">
+                    <a></a>
+                        <a><span><span><span class="calibre15">
+                            <span class="bold"><span>
+                                <span class="calibre10">II: THE TWOFOLD TASK IN WORKING OUT THE QUESTION OF BEING. METHOD AND DESIGN OF OUR INVESTIGATION
+                                    </span></span></span></span></span></span></a><span><span class="calibre15"><span class="bold"><span><span class="calibre10"></span></span></span></span></span></span></p>"""]
+        ],
+        'subheaders': [create_test_tag(p) for p in ["""
+            <p id="filepos41760" class="calibre_10">
+                <span class="calibre11"><span class="bold"><span class="italic">
+                    <a><span>1. The Necessity for Explicitly Restating the Question of Being</span></a>
+                </span></span></span>
+            </p>
+        """, """<p id="filepos108674" class="calibre_10">
+                    <span class="calibre11"><span class="bold">
+                        <span class="italic">
+                            <a><span>5. The Ontological Analytic of Dasein as Laying Bare the Horizon for an Interpretation of the Meaning of Being in General
+                        </span></a><span>
+                    </span><span></span>
+                </span></span></span></p>"""]],
+        'body': [create_test_tag(p) for p in [
+            """<p class="calibre_6"><span class="calibre6"><span><span class="calibre10">THIS </span></span><span><span class="calibre10">question has today been forgotten. Even though in our time we deem it progressive to give our approval to ‘metaphysics’ again, it is held that we have been exempted from the exertions of a newly rekindled <span class="italic">γιγαντομαχία περὶ τῆς οὐσίας</span><span>. </span>Yet the question we are touching upon is not just <span> </span><span>a n y</span> question. It is one which provided a stimulus for the researches of Plato and Aristotle, only to subside from then on <span class="italic">as a theme for actual investigation</span><span>.(1) </span>What these two men achieved was to persist through many alterations and ‘retouchings’ down to the ‘logic’ of Hegel. And what they wrested with the utmost intellectual effort from the phenomena, fragmentary and incipient though it was, has long since become trivialized. </span></span></span></p>""",
+            """<p class="calibre_6"><span class="calibre6"><span><span class="calibre10">The question of the meaning of Being must be <span class="italic">formulated</span><span>. </span>If it is a fundamental question, or indeed <span class="italic">the</span><span>
+                    </span>fundamental question, it must be made transparent, and in an appropriate way.(1) We must therefore explain briefly what belongs to any question whatsoever, so that from this standpoint the question of Being can be made visible as a <span class="italic">very special</span><span>
+                        </span>one with its own distinctive character. </span></span></span></p>""",
+            """<p class="calibre_6"><span class="calibre12"><span><span class="calibre13">Inquiry, as a kind of seeking, must be guided beforehand by what is sought. So the meaning of Being must already be available to us in some way. As we have intimated, we always conduct our activities in an understanding of Being. Out of this understanding arise both the explicit question of the meaning of Being and the tendency that leads us towards its conception. We do not <span class="italic">know</span><span>
+                    </span>what ‘Being’ means. But even if we ask, ‘What <span class="italic">is</span><span>
+                        </span>“Being”?’, we keep within an understanding of the ‘is’, though we are unable to fix conceptually what that ‘is’ signifies. We do not even know the horizon in terms of which that meaning is to be grasped and fixed. <span class="italic">But this vague average understanding of Being is still a Fact. </span></span></span></span></p>""",
+            """<p class="calibre_6"><span class="calibre12"><span><span class="calibre13">MORE than thirty years have passed since <span class="italic">Being and Time</span> first appeared...</span></span></span></p>""",
+        ]],
+        'footnotes': [create_test_tag(f) for f in [
+            """<p class="calibre_6"><span class="calibre9">1. First footnote</span></p>""",
+            """<p class="calibre_6"><span class="calibre9">4. Second footnote</span></p>"""
+        ]]
+    }
+
+    result = extract_supervised_patterns(labeled_selections)
+    
+    # Test results
+    assert result['status'] == 'success'
+    assert 'patterns' in result
+    
+    patterns = result['patterns']
+    assert len(patterns) == 4  # Should have patterns for all categories
+    
+    # Test specific patterns
+    assert any(p['name'] == 'p' for p in patterns['headers'])
+    assert any(p['class'] == ['calibre_8'] for p in patterns['headers'])
+    
+    assert any(p['name'] == 'p' for p in patterns['body'])
+    assert any(p['class'] == ['calibre_6'] for p in patterns['body'])
+    
+    assert any(p['name'] == 'p' for p in patterns['footnotes'])
+    assert any('calibre9' in p.get('class', []) for p in patterns['footnotes'])
+
+def test_unsupervised_pattern_extraction():
+    # Load sample HTML from epub
+    test_epub_path = str(Path("/home/rookslog/epubkit/epubkit/resources/epubs/Being and Time - Martin Heidegger.epub").resolve())
+    html_contents = load_epub_html(test_epub_path, (9, 10))
+    
+    # Test each HTML document
+    for html in html_contents:
+        patterns = extract_unsupervised_patterns(html)
+        
+        # Basic validation
+        assert isinstance(patterns, dict)
+        assert len(patterns) > 0
+
+        debug_print_dict(patterns)
+
+        analyze_extraction_coverage(html, patterns)
+        # Check pattern structure
+        for pattern_key, matches in patterns.items():
+            assert isinstance(pattern_key, tuple)
+            assert all(isinstance(m, bs4.Tag) for m in matches)
+            
+            # Verify pattern components
+            for component in pattern_key:
+                name, classes = component
+                assert isinstance(name, str)
+                assert isinstance(classes, tuple)
+                
+        # Check common patterns exist
+        pattern_names = set(name for pattern in patterns.keys() 
+                          for name, _ in pattern)
+        assert 'p' in pattern_names  # Should find paragraph patterns
+        

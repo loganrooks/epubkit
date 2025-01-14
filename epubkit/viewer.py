@@ -1458,190 +1458,120 @@ class DocumentViewer(ttk.Frame):
             # Scroll to top
             self.text.see("1.0")
 
-class DocumentViewer(ttk.Frame):
-    def __init__(self, parent, **kwargs):
-        super().__init__(parent, **kwargs)
-        self.setup_ui()
-        
-    def setup_ui(self):
-        # Configure styles
-        style = ttk.Style()
-        style.configure(
-            "Document.TFrame",
-            background=ViewerTheme.BG_COLOR
-        )
-        
-        # Main content frame
-        content_frame = ttk.Frame(self, style="Document.TFrame")
-        content_frame.pack(fill=tk.BOTH, expand=True)
-        
-        # Text widget with scrollbar
-        self.text = tk.Text(
-            content_frame,
-            wrap=tk.WORD,
-            padx=40,
-            pady=20,
-            spacing1=10,  # Space before paragraph
-            spacing2=2,   # Space between paragraph
-            spacing3=10,  # Space after paragraph
-            font=ViewerTheme.MAIN_FONT,
-            fg=ViewerTheme.FG_COLOR,
-            bg=ViewerTheme.BG_COLOR,
-            insertbackground=ViewerTheme.FG_COLOR,
-            selectbackground=ViewerTheme.ACCENT_COLOR,
-            selectforeground=ViewerTheme.BG_COLOR,
-            relief=tk.SUNKEN,
-            borderwidth=2
-        )
-        
-        scrollbar = ttk.Scrollbar(
-            content_frame,
-            orient=tk.VERTICAL,
-            command=self.text.yview
-        )
-        self.text.configure(yscrollcommand=scrollbar.set)
-        
-        # Pack components
-        self.text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        
-    def load_document(self, extracted: ExtractedText):
-        """Load parsed EPUB content"""
-        self.text.delete(1.0, tk.END)
-        
-        # Configure content tags
-        self.text.tag_configure(
-            "header",
-            font=ViewerTheme.HEADER_FONT,
-            spacing3=20,
-            foreground=ViewerTheme.ACCENT_COLOR
-        )
-        self.text.tag_configure(
-            "subheader",
-            font=ViewerTheme.SUBHEADER_FONT,
-            spacing3=15,
-            foreground=ViewerTheme.SECONDARY_COLOR
-        )
-        self.text.tag_configure(
-            "body",
-            font=ViewerTheme.MAIN_FONT,
-            spacing2=10
-        )
-        self.text.tag_configure(
-            "footnote",
-            font=ViewerTheme.MONO_FONT,
-            foreground=ViewerTheme.SECONDARY_COLOR,
-            spacing1=5
-        )
-            
-        # Insert content hierarchically
-        for header in extracted.headers:
-            self.text.insert(tk.END, f"\n{header.text}\n", "header")
-            
-            # Add subheaders under this header
-            for subheader in extracted.subheaders:
-                if subheader.header_path[0] == header.text:
-                    self.text.insert(tk.END, f"\n{subheader.text}\n", "subheader")
-            
-            # Add body text under this header
-            for block in extracted.body:
-                if block.header_path and block.header_path[0] == header.text:
-                    self.text.insert(tk.END, f"\n{block.text}\n", "body")
-                    
-                    # Add footnotes if present
-                    if block.footnotes:
-                        for i, note in enumerate(block.footnotes, 1):
-                            self.text.insert(tk.END, f"\n[{i}] {note}\n", "footnote")
-
-        # Scroll to top
-        self.text.see("1.0")
-
-    def load_document_from_toc(self, toc_entries: List[TOCEntry]) -> None:
-            """Load document from TOC structure with text blocks"""
-            self.text.delete(1.0, tk.END)
-            
-            # Configure content tags
-            self.text.tag_configure(
-                "toc_entry",
-                font=ViewerTheme.HEADER_FONT,
-                spacing3=20,
-                foreground=ViewerTheme.ACCENT_COLOR
-            )
-            self.text.tag_configure(
-                "toc_sub_entry", 
-                font=ViewerTheme.SUBHEADER_FONT,
-                spacing3=15,
-                foreground=ViewerTheme.SECONDARY_COLOR
-            )
-            self.text.tag_configure(
-                "block",
-                font=ViewerTheme.MAIN_FONT,
-                spacing2=10
-            )
-            
-            def process_entry(entry: TOCEntry, level: int = 0, block_index: int = 0) -> int:
-                """Recursively process entries and track positions"""
-                # Insert entry title
-                tag = "toc_entry" if level == 0 else "toc_sub_entry"
-                self.text.insert(tk.END, f"\n{'  ' * level}{entry.title}\n", tag)
-                
-                # Track entry's content range
-                entry.start_pos = self.text.index("end-1c")
-                
-                # Insert text blocks
-                for text in entry.text_blocks:
-                    block_start = self.text.index("end-1c")
-                    self.text.insert(tk.END, f"\n{text}\n", "block")
-                    block_end = self.text.index("end-1c") 
-                    
-                    # Add block tag for lookup
-                    block_tag = f"block_{block_index}"
-                    self.text.tag_add(block_tag, block_start, block_end)
-                    block_index += 1
-                
-                # Process children
-                for child in entry.children:
-                    block_index = process_entry(child, level + 1, block_index)
-                    
-                # Record end position after all content
-                entry.end_pos = self.text.index("end-1c")
-                return block_index
-
-            # Process entries and track positions
-            for entry in toc_entries:
-                process_entry(entry)
-                    
-            # Scroll to top
-            self.text.see("1.0")
-
 class TextSearchViewer(tk.Toplevel):
-    """Main viewer window"""
     def __init__(self, desktop: VaporwaveDesktop, search: SemanticSearch):
         super().__init__()
         
+        # Configure font for Japanese text
+        self.japanese_font = ("Noto Sans JP", 12)
+        
         self.desktop = desktop
+        self.desktop.lower()
+
         self.search = search
-        self.title("﻿ＴＥＸＴ  ＳＥＡＲＣＨ")
+        self.title("テキスト検索 TEXT SEARCH")
         self.geometry("1400x800")
-        self.attributes('-alpha', 0.95)
         
-        # Make window draggable
-        self.bind("<Button-1>", self.start_drag)
-        self.bind("<B1-Motion>", self.drag)
-        
-        # Add music player button
+        # Store embedders
+        self.embedders = {}
+        self.current_embedder = None
+        self.current_index = "flat"
         self.music_player = None
-        music_btn = tk.Button(
-            self,
-            text="Music Player",
-            command=self.toggle_music_player,
-            width=15,
-            **ViewerTheme.BUTTON_STYLE
-        )
-        music_btn.pack(pady=10)
         
+        # Create toolbar with options button
+        self.setup_toolbar()
         self.setup_ui()
-    
+
+        if DEBUG:
+            epub_path = Path(__file__).parent.resolve() / 'resources' / 'epubs' / 'Being and Time - Martin Heidegger.epub'
+            search, extracted_toc = self.process_epub(epub_path)
+            self.search = search
+            self.document_viewer.load_document_from_toc(extracted_toc)
+            self.update_toc_tree(extracted_toc)
+        
+    def setup_toolbar(self):
+        """Create Windows 95 style toolbar"""
+        toolbar = ttk.Frame(self)
+        toolbar.pack(fill=tk.X, padx=5, pady=5)
+        
+        # Add options button
+        self.options_btn = tk.Button(
+            toolbar,
+            text="⚙️ オプション Options",
+            command=self.show_options,
+            width=15,
+            **ViewerTheme.TOOL_BAR_BUTTON_STYLE
+        )
+        self.options_btn.pack(side=tk.LEFT, padx=5)
+                
+        # Left side buttons
+        self.file_btn = tk.Button(
+            toolbar,
+            text="ファイル F I L E",
+            command=self.load_epub,
+            width=12,
+            **ViewerTheme.TOOL_BAR_BUTTON_STYLE
+        )
+        self.file_btn.pack(side=tk.LEFT, padx=5)
+        
+       # Music player button with proper command binding
+        self.music_btn = tk.Button(
+            toolbar,
+            text="ム シ カ M U S I C",
+            command=self.toggle_music_player,
+            width=12,
+            **ViewerTheme.TOOL_BAR_BUTTON_STYLE
+        )
+        self.music_btn.pack(side=tk.RIGHT, padx=5)
+
+    def show_options(self):
+        dialog = OptionsDialog(
+            self,
+            self.embedders,
+            self.current_embedder,
+            self.current_index
+        )
+        self.wait_window(dialog)
+        
+        if dialog.result:
+            # Update embedder and index
+            self.current_embedder = dialog.result['embedder']
+            self.current_index = dialog.result['index']
+            self.search = self.embedders.get(self.current_embedder, None)
+            if self.search is None:
+                messagebox.showerror(
+                    VaporwaveFormatter.format_title("Error"),
+                    "Invalid embedder selected. Please check console for details."
+                )
+            self.desktop.toggle_animations(dialog.result['animations'])
+
+            # Update animation state
+            if hasattr(self, 'desktop'):
+                self.desktop.toggle_animations(dialog.result['animations'])
+
+    def load_epub(self):
+        """Handle EPUB file loading"""
+        file_path = filedialog.askopenfilename(
+            title="Select EPUB File",
+            filetypes=[("EPUB files", "*.epub")],
+            initialdir="~"
+        )
+        
+        if not file_path:
+            return
+            
+        try:
+            # Get tag selections
+            results = self.process_epub(file_path)
+            search, extracted_toc = results
+            self.search = search
+            self.document_viewer.load_document_from_toc(extracted_toc)
+            self.update_toc_tree(extracted_toc)
+
+            
+        except Exception as e:
+            self._handle_error(e) 
+
     def start_drag(self, event):
         self._drag_start_x = event.x
         self._drag_start_y = event.y
@@ -1652,45 +1582,81 @@ class TextSearchViewer(tk.Toplevel):
         self.geometry(f"+{x}+{y}")
         
     def setup_ui(self):
-        # Configure styles
+        # Configure window style
         self.configure(bg=ViewerTheme.BG_COLOR)
-        ttk.Style().configure(
-            ".",
-            background=ViewerTheme.BG_COLOR,
-            foreground=ViewerTheme.FG_COLOR
-        )
+        style = ttk.Style()
+        style.configure("TSeparator", background=ViewerTheme.ACCENT_COLOR)
         
-        # Main split pane
-        paned = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
-        paned.pack(fill=tk.BOTH, expand=True)
+        # Main horizontal split
+        self.paned = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
+        self.paned.pack(fill=tk.BOTH, expand=True)
         
-        # Left side - Search and results
-        left_frame = ttk.Frame(paned)
-        paned.add(left_frame, weight=2)
+        # Left sidebar
+        sidebar = ttk.Frame(self.paned)
+          # Convert collections to notebook
+        sidebar_notebook = ttk.Notebook(sidebar)
+        sidebar_notebook.pack(fill=tk.X, padx=5, pady=5)
+        self.paned.add(sidebar, weight=1)
         
-        # Search toolbar
-        self.search_bar = SearchToolbar(left_frame)
-        self.search_bar.pack(fill=tk.X, padx=5, pady=5)
+        # Collections tab
+        collections_frame = ttk.Frame(sidebar_notebook)
+        sidebar_notebook.add(collections_frame, text="Collections")
+        self.collections = CollectionPanel(collections_frame)
+        self.collections.pack(fill=tk.BOTH, expand=True)
         
-        # Results list
-        self.results_list = ResultsList(left_frame)
+        # TOC tab
+        toc_frame = ttk.Frame(sidebar_notebook) 
+        sidebar_notebook.add(toc_frame, text=VaporwaveFormatter.format_menu("Contents"))
+        
+        self.toc_tree = ttk.Treeview(toc_frame, selectmode="browse")
+        self.toc_tree.pack(fill=tk.BOTH, expand=True)
+        self.toc_tree.bind("<<TreeviewSelect>>", self._on_toc_select)
+
+        
+        # Collections at top of sidebar
+        collections_frame = ttk.LabelFrame(sidebar, text=VaporwaveFormatter.format_menu("Collections"))
+        collections_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+    
+        # Search bar
+        search_frame = ttk.Frame(sidebar)
+        search_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        self.search_bar = SearchToolbar(search_frame)
+        self.search_bar.pack(fill=tk.X)
+        self.search_bar.on_search = self.perform_search
+
+        
+        # Search results
+        results_frame = ttk.LabelFrame(sidebar, text="Results")
+        results_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        self.results_list = ResultsList(results_frame)
         self.results_list.pack(fill=tk.BOTH, expand=True)
         
-        # Right side - Collections
-        self.collections = CollectionPanel(paned)
-        paned.add(self.collections, weight=1)
+        # Right side document viewer
+        self.document_viewer = DocumentViewer(self.paned)
+        self.paned.add(self.document_viewer, weight=3)
         
-        # Connect events
-        self.search_bar.on_search = self.perform_search
-        self.results_list.on_view_context = self.view_context
-        self.results_list.on_add_to_collection = self.add_to_collection
+        # Set initial pane positions (1/3 - 2/3 split)
+        self.update_idletasks()  # Ensure window is drawn
+        width = self.winfo_width()
+        if width > 0:  # Only set sash if window has width
+            self.paned.sashpos(0, width // 3)
         
     def toggle_music_player(self):
-        if self.music_player is None or not self.music_player.winfo_exists():
-            self.music_player = RetroMusicPlayer(self)
-        else:
-            self.music_player.lift()
-        
+        """Toggle music player window"""
+        try:
+            if self.music_player is None or not self.music_player.winfo_exists():
+                self.music_player = RetroMusicPlayer(self)
+            else:
+                self.music_player.lift()
+        except Exception as e:
+            print(f"Error toggling music player: {e}")
+            messagebox.showerror(
+                ViewerText.TITLES["error"],
+                "Failed to open music player. Check console for details."
+            )
     def perform_search(self):
         """Execute search and display results"""
         query = self.search_bar.search_var.get()

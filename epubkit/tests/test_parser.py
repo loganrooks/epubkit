@@ -742,3 +742,140 @@ class TestTextExtraction:
         # Content should be under correct headers
         assert "This is the introduction text." in organized["Chapter 1: Introduction"]
         assert "Here are the main concepts." in organized["Chapter 2: Main Concepts"]
+
+class TestBeingAndTimeContent:
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        self.html_map = {
+            'THIS question has today been forgotten...': {
+                'html': '''<p class="calibre_6">
+                    <span class="calibre6"><span><span class="calibre10">THIS question has today been forgotten...</span></span></span>
+                </p>''',
+                'tag_hierarchy': [
+                    TagInfo('p', ['calibre_6'], '', []),
+                    TagInfo('span', ['calibre6'], '', []),
+                    TagInfo('span', [], '', []),
+                    TagInfo('span', ['calibre10'], '', [])
+                ]
+            },
+            '1. When Heidegger speaks of a question...': {
+                'html': '''<p class="calibre_6"><span class="calibre9">
+                    <span>1.<span class="italic"> '…als thematische Frage wirklicher Untersuchung'.</span></span>
+                    When Heidegger speaks of a question...</span></p>''',
+                'tag_hierarchy': [
+                    TagInfo('p', ['calibre_6'], '', []),
+                    TagInfo('span', ['calibre9'], '', []),
+                    TagInfo('span', [], '', []),
+                    TagInfo('span', ['italic'], '', [])
+                ]
+            }
+        }
+
+        self.selections = {
+            'body': [('THIS question has today been forgotten...', 
+                     tuple(ImmutableTagInfo.from_tag_info(t) 
+                           for t in self.html_map['THIS question has today been forgotten...']['tag_hierarchy']))],
+            'footnotes': [('1. When Heidegger speaks of a question...',
+                          tuple(ImmutableTagInfo.from_tag_info(t)
+                                for t in self.html_map['1. When Heidegger speaks of a question...']['tag_hierarchy']))]
+        }
+        
+        self.extractor = HTMLCategoryExtractor(self.selections)
+
+    def test_body_text_extraction(self):
+        html = self.html_map['THIS question has today been forgotten...']['html']
+        results = self.extractor.extract_category(html)
+        
+        assert 'body' in results
+        assert len(results['body']) == 1
+        assert 'THIS question has today been forgotten' in results['body'][0]['text']
+
+    def test_footnote_extraction(self):
+        html = self.html_map['1. When Heidegger speaks of a question...']['html']
+        results = self.extractor.extract_category(html)
+        
+        assert 'footnotes' in results
+        assert len(results['footnotes']) == 1
+        assert '1. When Heidegger speaks of a question' in results['footnotes'][0]['text']
+
+    def test_pattern_matching(self):
+        pattern = PatternReviewBackend(self.selections, self.html_map)
+        pattern.run_initial_tests()
+        
+        assert 'body' in pattern.test_results
+        assert 'footnotes' in pattern.test_results
+        assert len(pattern.test_results['body']['matches']) > 0
+        assert len(pattern.test_results['footnotes']['matches']) > 0
+
+def test_pattern_review_backend_initialization():
+    """Test PatternReviewBackend initialization and pattern loading"""
+    selections = {
+        'headers': [('Test Header', (ImmutableTagInfo('h1', ('title',), '', ()),))],
+        'body': [('Test Body', (ImmutableTagInfo('p', ('content',), '', ()),))]
+    }
+    html_map = {
+        'Test Header': {'html': '<h1 class="title">Test Header</h1>', 'tag_hierarchy': []},
+        'Test Body': {'html': '<p class="content">Test Body</p>', 'tag_hierarchy': []}
+    }
+    
+    backend = PatternReviewBackend(selections, html_map)
+    assert backend.selections == selections
+    assert backend.html_map == html_map
+    assert isinstance(backend.extractor, HTMLCategoryExtractor)
+    assert backend.extractor.category_patterns
+
+def test_pattern_review_initial_tests():
+    """Test initial pattern matching and categorization"""
+    selections = {
+        'headers': [('Chapter 1', (ImmutableTagInfo('h1', ('chapter',), '', ()),))],
+        'body': [('Content', (ImmutableTagInfo('p', ('text',), '', ()),))]
+    }
+    html_map = {
+        'Chapter 1': {'html': '<h1 class="chapter">Chapter 1</h1>', 'tag_hierarchy': []},
+        'Content': {'html': '<p class="text">Content</p>', 'tag_hierarchy': []},
+        'New Text': {'html': '<p class="text">New Text</p>', 'tag_hierarchy': []}
+    }
+    
+    backend = PatternReviewBackend(selections, html_map)
+    backend.run_initial_tests()
+    
+    assert 'headers' in backend.test_results
+    assert 'body' in backend.test_results
+    assert len(backend.test_results['headers']['matches']) > 0
+    assert len(backend.test_results['body']['matches']) > 0
+
+def test_pattern_review_test_pattern():
+    """Test pattern testing logic"""
+    selections = {
+        'headers': [('Test Header', (ImmutableTagInfo('h1', ('title',), '', ()),))]
+    }
+    html_map = {
+        'Test Header': {'html': '<h1 class="title">Test Header</h1>', 'tag_hierarchy': []},
+        'Another Header': {'html': '<h1 class="title">Another Header</h1>', 'tag_hierarchy': []}
+    }
+    
+    backend = PatternReviewBackend(selections, html_map)
+    test_pattern = r'<h1 class="title">[^<]*</h1>'
+    
+    matches, false_positives = backend.test_pattern_logic('headers', test_pattern)
+    assert len(matches) == 2  # Should match both headers
+    assert not false_positives  # No false positives expected
+
+def test_pattern_review_category_conflicts():
+    """Test detection of category conflicts"""
+    selections = {
+        'headers': [('Conflict Text', (ImmutableTagInfo('h1', ('dual',), '', ()),))],
+        'body': [('Conflict Text', (ImmutableTagInfo('p', ('dual',), '', ()),))]
+    }
+    html_map = {
+        'Conflict Text': {'html': '<h1 class="dual">Conflict Text</h1>', 'tag_hierarchy': []}
+    }
+    
+    backend = PatternReviewBackend(selections, html_map)
+    backend.run_initial_tests()
+    
+    assert 'conflicts' in backend.test_results['headers']
+    assert 'conflicts' in backend.test_results['body']
+
+
+

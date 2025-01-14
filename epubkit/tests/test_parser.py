@@ -1,4 +1,6 @@
 import dataclasses
+from pathlib import Path
+import bs4
 import pytest
 from bs4 import BeautifulSoup
 from epubkit.parser import (
@@ -7,19 +9,20 @@ from epubkit.parser import (
     CategoryExtractionError,
     CategoryType,
     MatchCriteria,
+    PatternReviewBackend,
     TagInfo,
     ImmutableTagInfo,
     html_to_selections,
     CategoryDict,
     HTML,
     TagMatcher,
-    ConditionalRule,
     TextBlock,
     ExtractedText,
-    extract_categorized_text,
     extract_text_by_headers
 )
-from typing import Dict, Set, Tuple, List
+from typing import Dict, Tuple, List, Optional
+
+from epubkit.tests.utils import analyze_extraction_coverage
 
 @pytest.fixture
 def sample_selections():
@@ -217,12 +220,10 @@ class TestHeideggerText:
         </p>"""],
             'body': ["""
                     <p class="calibre_6">
-                        <span class="calibre12" id="span1">
-                            <span data-custom="value">
-                                <span class="calibre13">Content</span>
-                            </span>
-                        </span>
-                    </p>
+                        <span class="calibre6">
+                            <span><span class="calibre10">THIS </span></span>
+                        <span>
+                            <span class="calibre10">question has today been forgotten. Even though in our time we deem it progressive to give our approval to ‘metaphysics’ again, it is held that we have been exempted from the exertions of a newly rekindled <span class="italic">γιγαντομαχία περὶ τῆς οὐσίας</span><span>. </span>Yet the question we are touching upon is not just <span> </span><span>a n y</span> question. It is one which provided a stimulus for the researches of Plato and Aristotle, only to subside from then on <span class="italic">as a theme for actual investigation</span><span>.(1) </span>What these two men achieved was to persist through many alterations and ‘retouchings’ down to the ‘logic’ of Hegel. And what they wrested with the utmost intellectual effort from the phenomena, fragmentary and incipient though it was, has long since become trivialized. </span></span></span></p>
                     """,
                     """<p class="calibre_6">
                         <span class="calibre12">
@@ -412,6 +413,22 @@ class TestHeideggerText:
         assert "NECESSITY, STRUCTURE, AND PRIORITY" in results['headers'][0]['text']
         assert len(results['subheaders']) == 1
         assert "Explicitly Restating" in results['subheaders'][0]['text']
+
+    def test_heidegger_single_block(self):
+        html = """
+         <p class="calibre_6">
+            <span class="calibre6"><span>
+                <span class="calibre10">THIS question has today been forgotten. 
+                Even though in our time we deem it progressive(1)</span>
+            </span></span>
+        </p>
+        """
+        
+        results = self.extractor.extract_category(html)
+        assert 'body' in results
+        assert len(results['body']) == 1
+        assert "THIS question has today been forgotten." in results['body'][0]['text']
+        assert "Even though in our time we deem it progressive(1)" in results['body'][0]['text']
 
     def test_heidegger_body_with_footnotes(self):
         html = """

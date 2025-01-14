@@ -972,37 +972,55 @@ class CollectionPanel(ttk.Frame):
                 json.dump(data, f, indent=2)
 
 class RetroMusicPlayer(tk.Toplevel):
-    """Retro-styled music player window"""
     def __init__(self, parent):
         super().__init__(parent)
-        self.title("﻿ＲＥＴＲＯ ＰＬＡＹＥＲ")
+        self.title("ム シ カ M U S I C プ レ イ ヤ ー P L A Y E R")
         self.geometry("400x300")
         
-        # Initialize pygame mixer
+        # Initialize pygame properly
+        pygame.init()
         pygame.mixer.init()
+        self.supported_formats = ('.mp3', '.wav', '.ogg')
         
+        self.is_seeking = False
+        self.end_event = pygame.USEREVENT + 1
+        pygame.mixer.music.set_endevent(self.end_event)
+
         self.current_song: Optional[str] = None
+        self.difference = 0
         self.is_playing = False
         self.songs: List[str] = []
-        self.load_songs()
+        self.listbox = None
         
-        # Make window draggable
         self.bind("<Button-1>", self.start_drag)
         self.bind("<B1-Motion>", self.drag)
-        
         self.setup_ui()
+        self.load_songs()
         
     def load_songs(self):
-        """Load MP3 files from resources/music"""
-        self.songs = list(Path("resources/music").glob("*.mp3"))
-        
+        """Load supported music files"""
+        try:
+            script_dir = Path(__file__).parent.resolve()
+            music_dir = script_dir / 'resources' / 'music'
+            
+            self.songs = []
+            for fmt in self.supported_formats:
+                self.songs.extend(music_dir.glob(f"*{fmt}"))
+                
+            print(f"Found music files: {[s.name for s in self.songs]}")
+            
+        except Exception as e:
+            print(f"Error loading songs: {e}")
+
     def setup_ui(self):
-        self.configure(bg=ViewerTheme.BG_COLOR)
+        self.configure(bg=ViewerTheme.FG_COLOR)
+        # minimum window size
+        self.minsize(350, 210)
         
         # Song info display
         self.info_frame = tk.Frame(
             self,
-            bg=ViewerTheme.BG_COLOR,
+            bg=ViewerTheme.FG_COLOR,
             height=100
         )
         self.info_frame.pack(fill=tk.X, padx=10, pady=5)
@@ -1011,8 +1029,8 @@ class RetroMusicPlayer(tk.Toplevel):
             self.info_frame,
             text="No song playing",
             font=ViewerTheme.HEADER_FONT,
-            fg=ViewerTheme.FG_COLOR,
-            bg=ViewerTheme.BG_COLOR
+            fg=ViewerTheme.BG_COLOR,
+            bg=ViewerTheme.FG_COLOR
         )
         self.song_label.pack(pady=5)
         
@@ -1021,7 +1039,7 @@ class RetroMusicPlayer(tk.Toplevel):
             text="00:00 / 00:00",
             font=ViewerTheme.MONO_FONT,
             fg=ViewerTheme.SECONDARY_COLOR,
-            bg=ViewerTheme.BG_COLOR
+            bg=ViewerTheme.FG_COLOR
         )
         self.time_label.pack()
         
@@ -1031,26 +1049,32 @@ class RetroMusicPlayer(tk.Toplevel):
             mode='determinate',
             length=350
         )
-        self.progress.pack(pady=10)
+        self.progress.pack(pady=10, padx=1)
+        self.progress.bind('<Button-1>', self.seek_position)
         
         # Control buttons frame
-        controls = tk.Frame(self, bg=ViewerTheme.BG_COLOR)
-        controls.pack(pady=10)
+        controls = tk.Frame(self, bg=ViewerTheme.FG_COLOR)
+        controls.pack(pady=10, padx=5)
         
+        # raised button style
         button_style = {
-            "width": 60,
-            "height": 30,
-            "fg_color": ViewerTheme.ACCENT_COLOR,
-            "hover_color": ViewerTheme.SECONDARY_COLOR
+            "width": 4,
+            "height": 2,
+            "font": ViewerTheme.JP_HEADER_FONT,
+            "bg": ViewerTheme.SECONDARY_COLOR, 
+            "fg": ViewerTheme.ACCENT_COLOR,
+            "activebackground": ViewerTheme.SECONDARY_COLOR,
+             "activeforeground": ViewerTheme.FG_COLOR,            
+             "relief": tk.RAISED
         }
         
         self.prev_btn = tk.Button(
             controls,
-            text="⏮",
+            text="<<",
             command=self.previous_song,
             **button_style
         )
-        self.prev_btn.pack(side=tk.LEFT, padx=5)
+        self.prev_btn.pack(side=tk.LEFT, padx=5, pady=5)
         
         self.play_btn = tk.Button(
             controls,
@@ -1058,32 +1082,33 @@ class RetroMusicPlayer(tk.Toplevel):
             command=self.play_pause,
             **button_style
         )
-        self.play_btn.pack(side=tk.LEFT, padx=5)
+        self.play_btn.pack(side=tk.LEFT, padx=5, pady=5)
         
         self.stop_btn = tk.Button(
             controls,
-            text="⏹",
+            text="■",
             command=self.stop,
             **button_style
         )
-        self.stop_btn.pack(side=tk.LEFT, padx=5)
+        self.stop_btn.pack(side=tk.LEFT, padx=5, pady=5)
         
         self.next_btn = tk.Button(
             controls,
-            text="⏭",
-            command=self.next_song,
+            text=">>",
             **button_style
         )
-        self.next_btn.pack(side=tk.LEFT, padx=5)
+        self.next_btn.pack(side=tk.LEFT, padx=5, pady=5)
         
         # Playlist button
         self.playlist_btn = tk.Button(
             self,
-            text="Playlist",
+            text="プァリスツ P l a y l i s t",
             command=self.show_playlist,
-            width=100
+            width=40,
+            **ViewerTheme.MEDIA_PLAYER_BUTTON_STYLE
         )
-        self.playlist_btn.pack(pady=10)
+        self.playlist_btn.pack(side=tk.BOTTOM, pady=10, padx=0)
+
         
         # Update timer
         self.update_time()
@@ -1098,26 +1123,51 @@ class RetroMusicPlayer(tk.Toplevel):
         self.geometry(f"+{x}+{y}")
         
     def play_pause(self):
-        if not self.current_song and self.songs:
-            self.current_song = str(self.songs[0])
-            self.play_song()
-        elif pygame.mixer.music.get_busy():
-            pygame.mixer.music.pause()
-            self.play_btn.configure(text="▶")
-            self.is_playing = False
+        try:
+            if not self.current_song:
+                # Load first song if none selected
+                if self.songs:
+                    self.current_song = str(self.songs[0])
+                    self.play_btn.configure(text="||")
+                    self.play_song()
+              
+            if not self.is_playing:
+                    pygame.mixer.music.unpause()
+                    self.play_btn.configure(text="||")
+                    self.is_playing = True
+                    self.update_song_label()
+            else:
+                pygame.mixer.music.pause()
+                self.play_btn.configure(text="▶")
+                self.is_playing = False
+        except Exception as e:
+            print(f"Error playing music: {e}")
+
+    def update_song_label(self):
+        """Update the song label with current song name"""
+        if self.current_song:
+            song_name = Path(self.current_song).stem
+            self.song_label.configure(text=song_name)
         else:
-            pygame.mixer.music.unpause()
-            self.play_btn.configure(text="⏸")
-            self.is_playing = True
+            self.song_label.configure(text="No song playing")
             
     def play_song(self):
         pygame.mixer.music.load(self.current_song)
         pygame.mixer.music.play()
-        self.play_btn.configure(text="⏸")
+        self.play_btn.configure(text="||")
         self.is_playing = True
+        self.difference = 0
         self.song_label.configure(
             text=Path(self.current_song).stem
         )
+        audio = MP3(self.current_song)
+        total_time = audio.info.length
+        total_mins = int(total_time // 60)
+        total_secs = int(total_time % 60)
+        self.time_label.configure(
+                    text=f"{0:02d}:{0:02d} / "
+                f"{total_mins:02d}:{total_secs:02d}"
+                )
         
     def stop(self):
         pygame.mixer.music.stop()
@@ -1142,53 +1192,115 @@ class RetroMusicPlayer(tk.Toplevel):
         self.play_song()
         
     def show_playlist(self):
-        playlist = tk.Toplevel(self)
-        playlist.title("Playlist")
-        playlist.geometry("300x400")
-        playlist.configure(bg=ViewerTheme.BG_COLOR)
-        
-        listbox = tk.Listbox(
-            playlist,
-            bg=ViewerTheme.BG_COLOR,
-            fg=ViewerTheme.FG_COLOR,
-            font=ViewerTheme.MAIN_FONT,
-            selectmode=tk.SINGLE
-        )
-        listbox.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
-        for song in self.songs:
-            listbox.insert(tk.END, song.stem)
+        # If there already is a playlist window, don't open another one
+        if self.listbox is not None:
+            self.listbox.lift()
+        else:
+            playlist = tk.Toplevel(self)
+            playlist.title("プァリスツ P l a y l i s t")
+            playlist.geometry("300x400")
+            playlist.configure(bg=ViewerTheme.BG_COLOR)
+            
+            self.listbox = tk.Listbox(
+                playlist,
+                bg=ViewerTheme.BG_COLOR,
+                fg=ViewerTheme.FG_COLOR,
+                font=ViewerTheme.MAIN_FONT,
+                selectmode=tk.SINGLE
+            )
+            self.listbox.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+            
+            for song in sorted(self.songs):
+                self.listbox.insert(tk.END, song.stem)
             
         def play_selected(event):
-            selection = listbox.curselection()
+            selection = self.listbox.curselection()
             if selection:
                 self.current_song = str(self.songs[selection[0]])
                 self.play_song()
                 
-        listbox.bind('<Double-Button-1>', play_selected)
+        self.listbox.bind('<Double-Button-1>', play_selected)
+    
+    def seek_position(self, event):
+        """Handle progress bar click to seek position"""
+        try:
+            if not self.current_song or not self.is_playing:
+                return
+                
+            # Calculate click position percentage
+            click_x = event.x
+            total_width = self.progress.winfo_width()
+            position_percent = click_x / total_width
+            
+            # Get song length and calculate new position
+            audio = MP3(self.current_song)
+            total_time = audio.info.length
+            new_time = position_percent * total_time 
+
+            total_time_playing = pygame.mixer.music.get_pos() / 1000
+            self.difference = new_time - total_time_playing
+            pygame.mixer.music.rewind()
+            pygame.mixer.music.set_pos(new_time)
+            # Reload and play from new position, for OGG it is absolute position in second, 
+            # for MP3 it is the relative position in seconds, so we must first call rewind() to set the position to 0
+          
+            
+            # Update progress bar immediately
+            self.progress['value'] = position_percent * 100
+
+            self.is_seeking=False
+            
+        except Exception as e:
+            print(f"Error seeking position: {e}")
+            
         
     def update_time(self):
-        if self.is_playing and self.current_song:
-            audio = MP3(self.current_song)
-            current_time = pygame.mixer.music.get_pos() / 1000
-            total_time = audio.info.length
-            
-            # Update progress bar
-            progress = (current_time / total_time) * 100
-            self.progress['value'] = progress
-            
-            # Update time label
-            current_mins = int(current_time // 60)
-            current_secs = int(current_time % 60)
-            total_mins = int(total_time // 60)
-            total_secs = int(total_time % 60)
-            
-            self.time_label.configure(
-                text=f"{current_mins:02d}:{current_secs:02d} / "
-                     f"{total_mins:02d}:{total_secs:02d}"
-            )
-            
-        self.after(1000, self.update_time)
+        """Update time display and progress"""
+        if self.is_playing and self.current_song and not self.is_seeking:
+            try:
+                # Check for song end event
+                for event in pygame.event.get():
+                    if event.type == self.end_event:
+                        self.next_song()
+                        return
+
+                audio = MP3(self.current_song)
+                # get pos in milliseconds but only accounts for how long the music has been playing for and doesn't
+                # take into account any starting_position offsets. So if I start the music at 10 seconds, the pos will
+                # still be 0 until 10 seconds have passed. This will affect our logic for seeking.
+                pos = pygame.mixer.music.get_pos()
+                
+                if pos == -1:  # Song ended
+                    self.next_song()
+                    return
+                    
+                # Calculate current time including seek
+                total_time_playing = (pos / 1000)
+                current_time = total_time_playing + self.difference
+                    
+                total_time = audio.info.length
+                
+                # Update progress bar
+                progress = (current_time / total_time) * 100
+                self.progress['value'] = progress
+                
+                # Update time label
+                current_mins = int(current_time // 60)
+                current_secs = int(current_time % 60)
+                total_mins = int(total_time // 60)
+                total_secs = int(total_time % 60)
+                
+                self.time_label.configure(
+                    text=f"{current_mins:02d}:{current_secs:02d} / "
+                         f"{total_mins:02d}:{total_secs:02d}"
+                )
+                
+                
+            except Exception as e:
+                print(f"Error updating time: {e}")
+                
+        self.after(100, self.update_time)
+
 
 class TextSearchViewer(tk.Toplevel):
     """Main viewer window"""

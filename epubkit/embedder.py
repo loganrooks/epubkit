@@ -59,6 +59,7 @@ class TrainingConfig:
 
 class TrainableEmbedder(Protocol):
     """Protocol for embedders that can be trained"""
+    def _update_progress(self, stage: str, progress: float) -> None: ...
     def train(self, texts: List[str], config: TrainingConfig) -> Dict[str, float]: ...
     def save_model(self, path: Path) -> None: ...
     @classmethod
@@ -66,6 +67,12 @@ class TrainableEmbedder(Protocol):
 
 class BaseTrainableEmbedder(BaseEmbeddingProvider):
     """Base class for trainable embedders"""
+
+    def _update_progress(self, stage: str, progress: float) -> None:
+        """Update progress if callback is provided"""
+        if self.progress_callback:
+            self.progress_callback(stage, progress)
+
     def train(self, texts: List[str], config: TrainingConfig) -> Dict[str, float]:
         """Train the embedder on texts"""
         raise NotImplementedError
@@ -85,13 +92,15 @@ class GloVeEmbedder(BaseTrainableEmbedder):
         self, 
         embedding_dim: int = 300,
         vocab_size: Optional[int] = None,
-        pretrained_path: Optional[Path] = None
+        pretrained_path: Optional[Path] = None,
+        progress_callback: Optional[Callable[[str, float], None]] = None
     ):
         self._dim = embedding_dim
         self.vocab_size = vocab_size
         self.word2idx: Dict[str, int] = {}
         self.idx2word: Dict[int, str] = {}
         self.cooccurrence: Optional[torch.Tensor] = None
+        self.progress_callback = progress_callback
         
         # Model components
         self.word_embeddings: Optional[nn.Embedding] = None
@@ -101,6 +110,11 @@ class GloVeEmbedder(BaseTrainableEmbedder):
         
         if pretrained_path:
             self.load_model(pretrained_path)
+            
+    def _update_progress(self, stage: str, progress: float) -> None:
+        """Update progress if callback is provided"""
+        if self.progress_callback:
+            self.progress_callback(stage, progress)
     
     def _build_vocab(self, texts: List[str], min_freq: int) -> None:
         """Build vocabulary from texts"""
@@ -150,7 +164,7 @@ class GloVeEmbedder(BaseTrainableEmbedder):
         self.context_biases = nn.Parameter(torch.zeros(vocab_size))
     
     def train(self, texts: List[str], config: TrainingConfig) -> Dict[str, float]:
-        """Train GloVe embeddings"""
+        """Train GloVe embeddings with proper batching and scalar loss"""
         # Build vocabulary and cooccurrence matrix
         self._build_vocab(texts, config.min_word_freq)
         self._build_cooccurrence(texts, config.context_window)
@@ -177,39 +191,53 @@ class GloVeEmbedder(BaseTrainableEmbedder):
             num_nonzero = len(nonzero)
             indices = torch.randperm(num_nonzero)
             
+            # Progress tracking
+            if self.progress_callback:
+                self.progress_callback(f"Training epoch {epoch+1}/{config.num_epochs}", epoch/config.num_epochs)
+            
             for start_idx in range(0, num_nonzero, config.batch_size):
                 batch_indices = indices[start_idx:start_idx + config.batch_size]
                 i = nonzero[batch_indices, 0]
                 j = nonzero[batch_indices, 1]
-                Xij = self.cooccurrence[i, j]
+                Xij = self.cooccurrence[i, j].unsqueeze(-1)  # [batch_size, 1]
                 
                 # Forward pass
-                wi = self.word_embeddings(i)
-                wj = self.context_embeddings(j)
-                bi = self.word_biases[i]
-                bj = self.context_biases[j]
+                wi = self.word_embeddings(i)      # [batch_size, dim]
+                wj = self.context_embeddings(j)    # [batch_size, dim]
+                bi = self.word_biases[i].unsqueeze(-1)  # [batch_size, 1]
+                bj = self.context_biases[j].unsqueeze(-1)  # [batch_size, 1]
+                
+                # Compute dot products [batch_size, 1]
+                dot_products = torch.sum(wi * wj, dim=1, keepdim=True)
                 
                 # GloVe loss
                 weight_factor = torch.minimum(
                     torch.pow(Xij/100, 0.75),
                     torch.ones_like(Xij)
                 )
-                loss = weight_factor * torch.pow(
-                    wi @ wj.transpose(-1, -2) + bi + bj - torch.log(Xij + 1),
+                
+                # Compute per-sample losses [batch_size, 1]
+                squared_diff = torch.pow(
+                    dot_products + bi + bj - torch.log(Xij + 1),
                     2
-                ).sum()
+                )
+                
+                # Compute weighted mean loss (scalar)
+                loss = (weight_factor * squared_diff).mean()
                 
                 # Backward pass
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
                 
-                total_loss += loss.item()
+                total_loss += loss.item() * len(batch_indices)
             
             avg_loss = total_loss / num_nonzero
             losses.append(avg_loss)
-            print(f"Epoch {epoch + 1}/{config.num_epochs}, Loss: {avg_loss:.4f}")
             
+            if self.progress_callback:
+                self.progress_callback(f"Epoch {epoch + 1}/{config.num_epochs}", (epoch + 1)/config.num_epochs)
+        
         return {"loss": losses[-1], "all_losses": losses}
     
     def embed_text(self, text: str) -> npt.NDArray[np.float32]:
@@ -262,11 +290,19 @@ class GloVeEmbedder(BaseTrainableEmbedder):
 
 class OpenAIEmbedder(BaseTrainableEmbedder):
     """OpenAI embeddings with fine-tuning support"""
-    def __init__(self, model: str = "text-embedding-ada-002", fine_tuned_model: Optional[str] = None):
+    def __init__(self, 
+                 model: str = "text-embedding-ada-002", 
+                 fine_tuned_model: Optional[str] = None,
+                progress_callback: Optional[Callable[[str, float], None]] = None
+):
         self.client = OpenAI()
         self.base_model = model
         self.model = fine_tuned_model or model
         self._dim = 1536
+        self.progress_callback = progress_callback
+
+    def _update_progress(self, stage, progress):
+        return super()._update_progress(stage, progress)
         
     def train(self, texts: List[str], config: TrainingConfig) -> Dict[str, float]:
         """Fine-tune embeddings using OpenAI API"""
@@ -467,12 +503,12 @@ if __name__ == "__main__":
     ]
     
     # # Train GloVe embedder
-    # glove = GloVeEmbedder(embedding_dim=100)
-    # results = glove.train(texts, TrainingConfig(
-    #     num_epochs=5,
-    #     batch_size=32
-    # ))
-    # glove.save_model(Path("glove_model.pt"))
+    glove = GloVeEmbedder(embedding_dim=100)
+    results = glove.train(texts, TrainingConfig(
+        num_epochs=5,
+        batch_size=32
+    ))
+    glove.save_model(Path("glove_model.pt"))
     
     # Fine-tune OpenAI embedder
     openai = OpenAIEmbedder()

@@ -1,7 +1,12 @@
-# epubs
+# resources
 resources/epubs/*
 resources/images/*
 resources/music/*
+tests/outputs/*
+
+
+
+*:Zone.Identifier
 
 # logs
 logs/

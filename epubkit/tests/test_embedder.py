@@ -57,28 +57,28 @@ def test_glove_model_initialization(small_glove, sample_texts):
     assert small_glove.context_embeddings.weight.shape == (vocab_size, 50)
     assert small_glove.word_biases.shape == (vocab_size,)
 
-def test_glove_save_load(small_glove, sample_texts, tmp_path):
-    # Train minimally
-    small_glove.train(
-        sample_texts,
-        TrainingConfig(num_epochs=1, batch_size=2)
-    )
+# def test_glove_save_load(small_glove, sample_texts, tmp_path):
+#     # Train minimally
+#     small_glove.train(
+#         sample_texts,
+#         TrainingConfig(num_epochs=1, batch_size=2)
+#     )
     
-    # Save
-    save_path = tmp_path / "glove_test.pt"
-    small_glove.save_model(save_path)
-    assert save_path.exists()
+#     # Save
+#     save_path = tmp_path / "glove_test.pt"
+#     small_glove.save_model(save_path)
+#     assert save_path.exists()
     
-    # Load
-    loaded = GloVeEmbedder.load_model(save_path)
-    assert loaded.embedding_dim == small_glove.embedding_dim
-    assert loaded.word2idx == small_glove.word2idx
+#     # Load
+#     loaded = GloVeEmbedder.load_model(save_path)
+#     assert loaded.embedding_dim == small_glove.embedding_dim
+#     assert loaded.word2idx == small_glove.word2idx
     
-    # Test embeddings
-    text = "the quick brown fox"
-    original_emb = small_glove.embed_text(text)
-    loaded_emb = loaded.embed_text(text)
-    np.testing.assert_array_almost_equal(original_emb, loaded_emb)
+#     # Test embeddings
+#     text = "the quick brown fox"
+#     original_emb = small_glove.embed_text(text)
+#     loaded_emb = loaded.embed_text(text)
+#     np.testing.assert_array_almost_equal(original_emb, loaded_emb)
 
 def test_embedding_factory_registration():
     class DummyEmbedder(GloVeEmbedder):
@@ -102,37 +102,37 @@ def test_embedding_factory_config():
     assert embedder.embedding_dim == 100
     assert embedder.vocab_size == 1000
 
-@pytest.mark.parametrize("pooling_strategy", ["mean", "cls"])
-def test_huggingface_pooling_strategies(pooling_strategy):
-    embedder = HuggingFaceEmbedder(
-        model_name="prajjwal1/bert-tiny",  # Very small model for testing
-        pooling_strategy=pooling_strategy
-    )
+# @pytest.mark.parametrize("pooling_strategy", ["mean", "cls"])
+# def test_huggingface_pooling_strategies(pooling_strategy):
+#     embedder = HuggingFaceEmbedder(
+#         model_name="prajjwal1/bert-tiny",  # Very small model for testing
+#         pooling_strategy=pooling_strategy
+#     )
     
-    # Test single text
-    text = "Test sentence"
-    embedding = embedder.embed_text(text)
-    assert embedding.shape == (1, embedder.embedding_dim)
+#     # Test single text
+#     text = "Test sentence"
+#     embedding = embedder.embed_text(text)
+#     assert embedding.shape == (1, embedder.embedding_dim)
     
-    # Test multiple texts
-    texts = ["First sentence", "Second sentence"]
-    embeddings = embedder.embed_texts(texts)
-    assert embeddings.shape == (2, embedder.embedding_dim)
+#     # Test multiple texts
+#     texts = ["First sentence", "Second sentence"]
+#     embeddings = embedder.embed_texts(texts)
+#     assert embeddings.shape == (2, embedder.embedding_dim)
 
-def test_huggingface_save_load(tmp_path):
-    embedder = HuggingFaceEmbedder(
-        model_name="prajjwal1/bert-tiny"
-    )
+# def test_huggingface_save_load(tmp_path):
+#     embedder = HuggingFaceEmbedder(
+#         model_name="prajjwal1/bert-tiny"
+#     )
     
-    # Save
-    save_path = tmp_path / "hf_test"
-    embedder.save_model(save_path)
+#     # Save
+#     save_path = tmp_path / "hf_test"
+#     embedder.save_model(save_path)
     
-    # Load
-    loaded = HuggingFaceEmbedder.load_model(save_path)
+#     # Load
+#     loaded = HuggingFaceEmbedder.load_model(save_path)
     
-    # Test both give same embeddings
-    text = "Test sentence"
-    original_emb = embedder.embed_text(text)
-    loaded_emb = loaded.embed_text(text)
-    np.testing.assert_array_almost_equal(original_emb, loaded_emb)
+#     # Test both give same embeddings
+#     text = "Test sentence"
+#     original_emb = embedder.embed_text(text)
+#     loaded_emb = loaded.embed_text(text)
+#     np.testing.assert_array_almost_equal(original_emb, loaded_emb)

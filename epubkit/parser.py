@@ -19,6 +19,8 @@ import datetime
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing_extensions import Literal
+
+from epubkit.utils import is_complete_sentence
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 if TYPE_CHECKING:
@@ -966,14 +968,7 @@ class ExtractedText:
                                 f.write(f"- {note}\n")
                         f.write("\n---\n\n")
 
-def extract_categorized_text(epub_path: str, output_path: Optional[Path] = None) -> ExtractedText:
-    """Extract and categorize text from EPUB file"""
-    # Get user selections through GUI
-    selections = get_user_tag_examples(epub_path)
-    
-    # Initialize extractor
-    extractor = HTMLCategoryExtractor(selections)
-    
+def extract_categorized_text(epub_path: str, extractor: HTMLCategoryExtractor) -> ExtractedText:  
     # Read EPUB file
     book = epub.read_epub(epub_path)
     extracted = ExtractedText([], [], [], [], [])
@@ -1021,11 +1016,6 @@ def extract_categorized_text(epub_path: str, output_path: Optional[Path] = None)
                     text=match['text'],
                     category='footnotes'
                 ))
-    
-    # Save to files if output path provided
-    if output_path:
-        extracted.save_to_file(output_path)
-    
     return extracted
 
 def extract_text_by_headers(
@@ -1090,20 +1080,544 @@ def extract_text_by_headers(
     
     return organized_text
 
-if __name__ == "__main__":
-    epub_file = "resources/epubs/Being and Time - Martin Heidegger.epub"
-    output_dir = Path("output")
+
+
+def extract_supervised_patterns(labeled_selections):
+    """
+    Extract patterns from labeled HTML selections.
     
-    # Example 1: Extract all categorized text
-    print("Extracting categorized text...")
-    categorized = extract_categorized_text(epub_file, output_dir / "categorized")
+    Args:
+        labeled_selections: Dict[str, List[bs4.Tag]] - Category mapped to example tags
+    Returns:
+        Dict containing either patterns or conflicts
+    """
+    patterns = {}
+    conflicts = {}
     
-    # Example 2: Extract text organized by headers with footnotes at the end
-    print("\nExtracting text by headers...")
-    organized = extract_text_by_headers(
-        epub_file,
-        footnote_mode='end',
-        output_path=output_dir / "by_headers"
+    # Process each category's examples
+    for category, selections in labeled_selections.items():
+        category_patterns = []
+        
+        for tag in selections:
+            # Find enclosing pattern by traversing up
+            pattern = []
+            current = tag
+            prev_text = tag.get_text()
+            
+            while current.parent:
+                current = current.parent
+                if current.get_text() != prev_text:
+                    break
+                pattern.append({
+                    'name': current.name,
+                    'class': current.get('class', []),
+                    'attrs': {k:v for k,v in current.attrs.items() 
+                             if k not in ['class', 'id']}
+                })
+            
+            category_patterns.append(pattern)
+            
+        # Find common pattern across examples
+        common_pattern = find_common_pattern(category_patterns)
+        patterns[category] = common_pattern
+    
+    # Check for conflicts between categories
+    for cat1, pat1 in patterns.items():
+        for cat2, pat2 in patterns.items():
+            if cat1 != cat2 and patterns_match(pat1, pat2):
+                conflicts[f"{cat1}-{cat2}"] = {
+                    'categories': [cat1, cat2],
+                    'pattern': pat1
+                }
+    
+    if conflicts:
+        return {'status': 'conflicts', 'conflicts': conflicts}
+    return {'status': 'success', 'patterns': patterns}
+
+def extract_unsupervised_patterns(html_content: BeautifulSoup | str):
+    """
+    Extract and group patterns from HTML without labels.
+    
+    Args:
+        html_content: str or bs4.BeautifulSoup - HTML content
+    Returns:
+        Dict mapping pattern groups to matching tags
+    """
+    from bs4 import BeautifulSoup
+    if isinstance(html_content, str):
+        soup = BeautifulSoup(html_content, 'html.parser')
+    else:
+        soup = html_content
+        
+    # Find all text nodes
+    text_nodes = soup.find_all(text=True)
+    pattern_groups = {}
+    
+    for text in text_nodes:
+        if not text.strip():
+            continue
+            
+        # Find enclosing pattern
+        pattern = []
+        current = text.parent
+        prev_text = text
+        
+        while current:
+            if current.get_text() != prev_text:
+                break
+            pattern.append({
+                'name': current.name,
+                'class': current.get('class', []),
+                'attrs': {k:v for k,v in current.attrs.items() 
+                         if k not in ['class', 'id']}
+            })
+            current = current.parent
+
+        if len(pattern) < 2:
+            continue
+        # Create pattern key for grouping
+        pattern_key = tuple(
+            (p['name'], tuple(sorted(p['class']))) 
+            for p in reversed(pattern)
+        )
+
+        if pattern_key[0][0] not in ['p', 'h1', 'h2', 'h3']:
+            continue
+        
+        if pattern_key not in pattern_groups:
+            pattern_groups[pattern_key] = []
+        pattern_groups[pattern_key].append(text.parent)
+    
+    return pattern_groups
+
+def find_common_pattern(patterns):
+    """Helper to find common pattern across examples"""
+    if not patterns:
+        return []
+    
+    min_len = min(len(p) for p in patterns)
+    common = []
+    
+    for i in range(min_len):
+        current = patterns[0][i]
+        if all(p[i] == current for p in patterns):
+            common.append(current)
+        else:
+            break
+            
+    return common
+
+def patterns_match(p1, p2):
+    """Helper to check if two patterns match"""
+    if len(p1) != len(p2):
+        return False
+        
+    return all(
+        a['name'] == b['name'] and
+        set(a['class']) == set(b['class']) and
+        a['attrs'] == b['attrs']
+        for a, b in zip(p1, p2)
     )
+
+@dataclass
+class TOCEntry:
+    """Represents a table of contents entry"""
+    title: str
+    href: str
+    level: int
+    children: List['TOCEntry'] = field(default_factory=list)
+    text_blocks: List[str] = field(default_factory=list)
+    html_blocks: List[str] = field(default_factory=list)
+    start_pos: str | None = None  # Track text widget position
+    end_pos: str | None = None
+
+    def __hash__(self):
+        return hash((self.title, self.href, self.level))
     
-    print("\nExtraction complete. Check the output directory for results.")
+    def __eq__(self, other):
+        return (
+            self.title == other.title and
+            self.href == other.href and
+            self.level == other.level and
+            self.children == other.children
+        )
+    
+
+from enum import Enum, auto
+
+class TOCStyle(Enum):
+    NESTED_LIST = auto()  # Uses ul/li nesting for hierarchy
+    CLASS_BASED = auto()  # Uses classes to indicate levels
+    MIXED = auto()        # Combination of both
+
+@dataclass
+class HeaderTagSearch():
+    """Represents a header tag with additional attributes"""
+    taginfo: TagInfo | None = None
+    string: str | re.Pattern | None = field(default_factory=str)
+
+    def __init__(self, tag: str, classes: set[str] = {}, id: str | None = "", attrs: set[tuple[str, str]] | None = {}, string: str | re.Pattern | None = None):
+        self.taginfo = TagInfo(tag, classes=classes, id=id, attrs=attrs)
+        self.string = string
+
+class TOCExtractor:
+    '''Backend for TOCExtractorDialogueUI. 
+    Takes in an epub file and extracts the table of contents + text with user input. 
+    It loads the epub file as an ebooklib.epub and has functions of course to get the index files from it.
+    Then it looks for common indicators of a ToC page i.e. within 10 pages, has as a Tag "Table of Contents" or "Contents" etc., case invariant.
+    If it can't find it, it will return the first ten index files and ask the user to find the ToC page. Even if it does think it finds it, 
+    it will still ask the user to confirm and if it fails then it will return the first ten index files. 
+    The front end will then handle the user selecting the different header levels for the ToC, they only need one example of each.
+    The front end then passes this as a dictionary of html strings to the backend to parse the identifying tags, classes and attributes. Of course,
+    all ToC entries have an <a> tag so this is a given. 
+    We will then use this to create a nested ToC structure with the hyperlinks. This will then be used, along with the ebooklib.epub object to extract
+    the text under each header which we will do not on the HTML but on the result of BeautifulSoup(ebooklib.Epub.get_body_content(), 'html.parser').get_text().splitlines(), a list of "paragraphs".
+    I say paragraphs but there can be some artifacts like empty newlines and pagenumbers and header elements that will need to be cleaned up.
+    We will clean up the results of that by asking the user to identify any non-text paragraphs (like headers) which we will then use to create a regex that, ignores those lines.
+    Also, since each header will be on its own line, as we iterate through the text, we will use the header dictionary to check if a line is indeed a header and
+    adjust the extraction appropriately so each header will have its own list of text blocks.
+    '''
+
+    """Extracts TOC and content from EPUB files"""
+    def __init__(self, epub_path: str):
+        self.epub_path = epub_path
+        self.book = epub.read_epub(epub_path)
+        self.toc_page = None
+        self.toc_structure: List[TOCEntry] = []
+        self.toc_style: Optional[TOCStyle] = None
+        
+        # Track TOC patterns once identified
+        self.toc_patterns: Dict[int, Dict] = field(default_factory=dict)  # level -> pattern info
+        self.artifact_patterns: Set[str | re.Pattern] = [
+            r'^\s*\d+\s*$',  # Page numbers
+            r'^\s*$',  # Empty lines
+            r'^\s*[•⁃·]\s*$',  # List bullets
+            r'^\s*[ivxlcdmIVXLCDM]+\s*$',  # Roman numerals
+            r'^\\x0c$'  # Page break characters
+        ]
+        self.toc_header_patterns: List[HeaderTagSearch] = [
+            HeaderTagSearch(tag='h1', string=re.compile(r'^\s*(table of contents|contents)\s*$', re.I)),
+            HeaderTagSearch(tag='h2', string=re.compile(r'^\s*(table of contents|contents)\s*$', re.I)),
+            HeaderTagSearch(tag='h3', string=re.compile(r'^\s*(table of contents|contents)\s*$', re.I))
+        ]
+        
+    def find_toc_candidates(self) -> List[Tuple[str, str]]:
+        """Find potential TOC pages in first 10 items.
+        Returns a list of tuples containing [1] the file name and [2] the content of the item."""
+        candidates = []
+        
+        for i, item in enumerate(self.book.get_items_of_type(ebooklib.ITEM_DOCUMENT)):
+            if i >= 8:  # Only check first 8 sections
+                break
+                
+            content = item.get_content().decode('utf-8')
+            soup = BeautifulSoup(content, 'html.parser')
+            
+            # Look for TOC indicators
+            toc_indicators = {
+                'title': bool(any(soup.find(toc_header_pattern.taginfo.tag, 
+                    string=toc_header_pattern.string) for toc_header_pattern in self.toc_header_patterns)),
+                'links': len(soup.find_all('a')),
+                'hierarchical': bool(soup.find_all(['ul', 'ol']))
+            }
+            
+            if toc_indicators['title'] or (
+                toc_indicators['links'] > 10 and toc_indicators['hierarchical']) or (
+                toc_indicators['links'] > 15
+                ):
+                candidates.append((str(item.file_name), content))
+                
+        return candidates
+        
+    def set_toc_page(self, html_content: str) -> None:
+        """Set the TOC page content for parsing"""
+        self.toc_page = html_content
+
+    def get_toc_page(self, parsed: bool = False) -> str:
+        """Get the TOC page content"""
+        if not self.toc_page:
+            raise ValueError("TOC page not set")
+        if parsed:
+            return str(BeautifulSoup(self.toc_page, 'html.parser'))
+        return self.toc_page
+        
+    def detect_toc_style(self, html_content: str) -> TOCStyle:
+        """Analyze TOC structure to determine style"""
+        soup = BeautifulSoup(html_content, 'html.parser')
+        
+        # Check for nested lists
+        nested_lists = bool(soup.find('ul')) and any(
+            ul.find('ul') for ul in soup.find_all('ul')
+        )
+        
+        # Check for level-indicating classes
+        level_classes = any(
+            'toc' in ' '.join(p.get('class', [])) and not p.find_parent('ul')
+            for p in soup.find_all('p')
+        )
+        
+        if nested_lists and not level_classes:
+            return TOCStyle.NESTED_LIST
+        elif level_classes and not nested_lists:
+            return TOCStyle.CLASS_BASED
+        else:
+            return TOCStyle.MIXED
+
+    def extract_nested_list_structure(self) -> List[TOCEntry]:
+        """Extract TOC from nested ul/li structure"""
+        soup = BeautifulSoup(self.toc_page, 'html.parser')
+        
+        def process_list(ul_element: bs4.Tag, level: int = 0) -> List[TOCEntry]:
+            entries = []
+
+            first_li = ul_element.find('li')
+
+            if not first_li:
+                return entries
+            
+            level_iter = [first_li] + list(first_li.find_next_siblings())
+            
+            for li in level_iter:
+                if isinstance(li, bs4.NavigableString):
+                    continue
+
+                elif li.name == 'ul': # stumbled upon a nested list 
+                    if len(entries) > 0:
+                        entries[-1].children = process_list(li, level + 1)
+                    else:
+                        entries.extend(process_list(li, level + 1))
+                    continue
+
+                # Find link in this li
+                link = li.find('a')
+                if not link:
+                    continue
+                    
+                entry = TOCEntry(
+                    title=link.get_text().strip(),
+                    href=link.get('href', ''),
+                    level=level
+                )
+                # # Process nested list if present
+                # nested_ul = li.find('ul')
+                # if nested_ul:
+                #     entry.children = process_list(nested_ul, level + 1)
+                    
+                entries.append(entry)
+                
+            return entries
+        
+        # Find top-level lists
+        for toc_header_pattern in self.toc_header_patterns:
+            toc_head = soup.find(toc_header_pattern.taginfo.tag, string=toc_header_pattern.string)
+            if toc_head:
+                break
+        entries = []
+        if toc_head:
+            main_ul = toc_head.find_next('ul')
+            if main_ul: 
+                entries.extend(process_list(main_ul))
+            
+        return entries
+
+
+
+    def extract_class_based_structure(self, patterns: Dict[int, Dict]) -> List[TOCEntry]:
+        """Extract TOC structure using identified patterns"""
+        if not self.toc_page:
+            raise ValueError("No TOC page set")
+            
+        soup = BeautifulSoup(self.toc_page, 'html.parser')
+        self.toc_patterns = patterns
+        entries = []
+        current_level = {i: None for i in range(len(patterns))}
+        
+        for tag in soup.find_all(['li', 'p', 'div']):
+            # Check each level's pattern
+            for level, pattern in patterns.items():
+                if self._matches_toc_pattern(tag, pattern):
+                    # Extract title and href
+                    link = tag.find('a')
+                    if not link:
+                        continue
+                        
+                    entry = TOCEntry(
+                        title=link.get_text().strip(),
+                        href=link['href'],
+                        level=level
+                    )
+                    
+                    # Add to hierarchy
+                    if level == 0:
+                        entries.append(entry)
+                        current_level[0] = entry
+                    else:
+                        parent = current_level[level - 1]
+                        if parent:
+                            parent.children.append(entry)
+                        current_level[level] = entry
+                        
+                    break  # Stop checking patterns once matched
+                    
+        self.toc_structure = entries
+        return entries
+        
+    def _matches_toc_pattern(self, tag: BeautifulSoup, pattern: Dict) -> bool:
+        """Check if tag matches TOC pattern"""
+        # Match tag name
+        if tag.name != pattern.get('tag'):
+            return False
+            
+        # Match classes
+        tag_classes = set(tag.get('class', []))
+        pattern_classes = set(pattern.get('classes', []))
+        if not pattern_classes.issubset(tag_classes):
+            return False
+            
+        # Match attributes
+        for key, value in pattern.get('attrs', {}).items():
+            if tag.get(key) != value:
+                return False
+                
+        return True     
+
+    def extract_toc_structure(self, patterns: Optional[Dict[int, Dict]] = None) -> List[TOCEntry]:
+        """Main extraction method with style detection"""
+        if not self.toc_page:
+            raise ValueError("No TOC page set")
+            
+        # Detect TOC style if not already set
+        if not self.toc_style:
+            self.toc_style = self.detect_toc_style(self.toc_page)
+            
+        # Extract based on style
+        if self.toc_style == TOCStyle.NESTED_LIST:
+            self.toc_structure = self.extract_nested_list_structure()
+        elif self.toc_style == TOCStyle.CLASS_BASED:
+            if not patterns:
+                raise ValueError("Pattern dictionary required for class-based TOC")
+            self.toc_structure = self.extract_class_based_structure(patterns)
+        else:
+            # Mixed mode - try nested list first, fall back to patterns
+            entries = self.extract_nested_list_structure()
+            if not entries and patterns:
+                entries = self.extract_class_based_structure(patterns)
+            self.toc_structure = entries
+            
+        return self.toc_structure
+
+    def _merge_blocks(self, text_blocks: List[str], html_blocks: List[str]) -> Tuple[List[str], List[str]]:
+        """Merge incomplete paragraph blocks while maintaining HTML mapping"""
+        if not text_blocks:
+            return [], []
+            
+        merged_text = []
+        merged_html = []
+        current_text = text_blocks[0]
+        current_html = html_blocks[0]
+        
+        for i in range(1, len(text_blocks)):
+            if not is_complete_sentence(current_text):
+                # Merge with next block
+                current_text += " " + text_blocks[i]
+                current_html += html_blocks[i]
+            else:
+                # Complete paragraph - save and start new
+                merged_text.append(current_text)
+                merged_html.append(current_html)
+                current_text = text_blocks[i]
+                current_html = html_blocks[i]
+        
+        # Add final block
+        merged_text.append(current_text)
+        merged_html.append(current_html)
+        
+        return merged_text, merged_html
+
+    def extract_text_blocks(self) -> None:
+        """Extract text and HTML blocks, assigning each to appropriate TOC entry"""
+        # Build entry lookup by title
+        entry_map = {}
+        def map_entries(entry: TOCEntry):
+            entry_map[entry.title] = entry
+            for child in entry.children:
+                map_entries(child)
+        for entry in self.toc_structure:
+            map_entries(entry)
+            
+        # Process each index file
+        for i, item in enumerate(self.book.get_items_of_type(ebooklib.ITEM_DOCUMENT)):
+            content = item.get_body_content().decode('utf-8')
+            soup = BeautifulSoup(content, 'html.parser')
+            
+            # Extract text and HTML blocks in parallel
+            text_blocks = []
+            html_blocks = []
+            for block in soup.find_all(['p', 'div']):  # Add other relevant tags
+                text = block.get_text().strip()
+                if text and not self._is_artifact(text):
+                    text_blocks.append(text)
+                    html_blocks.append(str(block))
+                    
+            # Find entry for this file
+            current_entry = None
+            for entry in entry_map.values():
+                if item.file_name.endswith(entry.href.split('#')[0]):
+                    current_entry = entry
+                    break
+                    
+            # Assign blocks to entries
+            if current_entry:
+                text_buffer = []
+                html_buffer = []
+                
+                for text, html in zip(text_blocks, html_blocks):
+                    # Check if block is a header
+                    if text in entry_map:
+                        # Merge and save buffered blocks
+                        if text_buffer and current_entry:
+                            merged_text, merged_html = self._merge_blocks(text_buffer, html_buffer)
+                            current_entry.text_blocks.extend(merged_text)
+                            current_entry.html_blocks.extend(merged_html)
+                        # Switch to new entry    
+                        current_entry = entry_map[text]
+                        text_buffer = []
+                        html_buffer = []
+                    else:
+                        text_buffer.append(text)
+                        html_buffer.append(html)
+                
+                # Merge and save remaining blocks
+                if text_buffer and current_entry:
+                    merged_text, merged_html = self._merge_blocks(text_buffer, html_buffer)
+                    current_entry.text_blocks.extend(merged_text)
+                    current_entry.html_blocks.extend(merged_html)
+
+                    
+
+    def _add_artifact_pattern(self, pattern: str) -> None:
+        """Add pattern to ignore as artifact"""
+        self.artifact_patterns.add(pattern)
+            
+    def _is_artifact(self, text: str) -> bool:
+        """Check if text block is an artifact to be filtered"""
+        return any(re.match(pattern, text) for pattern in self.artifact_patterns)
+        
+    def save_extracted_text(self, output_dir: str) -> None:
+        """Save extracted text organized by TOC structure"""
+        def write_entry(entry: TOCEntry, file, level: int = 0):
+            # Write header
+            file.write(f"{'#' * (level + 1)} {entry.title}\n\n")
+            
+            # Write text blocks
+            for block in entry.text_blocks:
+                file.write(f"{block}\n\n")
+                
+            # Write children
+            for child in entry.children:
+                write_entry(child, file, level + 1)
+                
+        output_path = Path(output_dir) / f"{Path(self.epub_path).stem}_extracted.txt"
+        with open(output_path, 'w', encoding='utf-8') as f:
+            for entry in self.toc_structure:
+                write_entry(entry, f)

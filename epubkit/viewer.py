@@ -1752,6 +1752,9 @@ class MockSearch:
                 metadata={"page": 3, "position": 1}
             )
         ]
+
+    def __iter__(self):
+        return iter(self.items)
     
     @classmethod
     def load(cls, path: Path) -> 'MockSearch':
@@ -1858,6 +1861,26 @@ class OptionsDialog(tk.Toplevel):
             'animations': self.anim_var.get()
         }
         self.destroy()
+
+
+def create_test_gif():
+    """Create a test GIF if none exist"""
+    gif_path = Path('resources/gifs/test.gif')
+    if not any(Path('resources/gifs').glob('*.gif')):
+        # Create simple animated GIF
+        frames = []
+        colors = ['red', 'blue', 'green']
+        for color in colors:
+            img = Image.new('RGB', (100, 100), color)
+            frames.append(img)
+        
+        frames[0].save(
+            gif_path,
+            save_all=True,
+            append_images=frames[1:],
+            duration=500,
+            loop=0
+        )
 
 def run_mock_viewer():
     """Run the viewer with mock data for testing"""

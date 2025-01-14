@@ -9,7 +9,6 @@ from .parser import (
     TagInfo,
     CategoryType,
     CategoryMatch,
-    get_user_tag_examples,
 )
 
 __version__ = "0.1.0"

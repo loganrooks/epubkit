@@ -3,6 +3,7 @@ resources/epubs/*
 resources/images/*
 resources/music/*
 tests/outputs/*
+tests/*.ipynb
 
 
 

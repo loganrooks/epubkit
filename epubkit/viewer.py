@@ -1,21 +1,74 @@
 from __future__ import annotations
+from datetime import datetime
+import logging
+import sys
+import threading
 import tkinter as tk
-from tkinter import ttk, messagebox, font
-from ttkthemes import ThemedTk  
-import customtkinter as ctk  
+from tkinter import PhotoImage, ttk, messagebox
 from pathlib import Path
-from typing import Dict, List, Optional, Any
-from dataclasses import dataclass
+import traceback
+from typing import Dict, List, Optional, Tuple
+from dataclasses import dataclass, replace
 import json
+from epubkit.debug import filter_traceback, setup_logging
+from epubkit.dialogueUI import DialogText, EPUBTagSelectorUI, DialogStyle, PatternReviewDialog, SelectionReviewDialogUI, TOCExtractorDialogUI, TOCExtractorText, VaporwaveFormatter
+from epubkit.parser import  ExtractedText, HTMLCategoryExtractor, HTMLInfo, ImmutableTagInfo, TOCEntry, TOCExtractor, extract_categorized_text, CategoryDict
 from epubkit.search import SearchResult, SemanticSearch
 from PIL import Image, ImageTk
+from tkinter import filedialog
 import random
-import glob
-import os
 import pygame
 from mutagen.mp3 import MP3
 import time
-from customtkinter import CTkToplevel, CTkFrame
+import shutil
+
+DEBUG = True
+
+DEBUG_SELECTIONS = {'headers': ["""<p id="filepos41583" class="calibre_8">
+                        <span class="calibre11"><span class="bold">
+                            I: THE NECESSITY, STRUCTURE, AND PRIORITY OF THE QUESTION OF BEING
+                        </span></span>
+                    </p>"""],
+            'subheaders': ["""<p id="filepos41760" class="calibre_10">
+            <span class="calibre11"><span class="bold"><span class="italic">
+                <a><span>1. The Necessity for Explicitly Restating the Question of Being</span></a>
+            </span></span></span>
+        </p>"""],
+            'body': ["""
+                    <p class="calibre_6">
+                        <span class="calibre12" id="span1">
+                            <span data-custom="value">
+                                <span class="calibre13">Content</span>
+                            </span>
+                        </span>
+                    </p>
+                    """,
+                    """<p class="calibre_6">
+                        <span class="calibre12">
+                            <span>
+                                <span class="calibre13">
+                                    MORE than thirty years have passed since 
+                                    <span class="italic">Being and Time</span>
+                                    first appeared...
+                                </span>
+                            </span>
+                        </span>
+                    </p>
+                    """,
+                    """<p class="calibre_6">
+                        <span class="calibre12"><span><span class="calibre13">
+                            Text before <span class="italic">Being and Time</span><span></span>
+                            continues after with more content
+                        </span></span></span>
+                    </p>
+                    """],
+            'footnotes': ['<p class="calibre_6"><span class="calibre9"><span>1.<span class="italic"> ‘…als thematische Frage wirklicher Untersuchung’.</span></span>When Heidegger speaks of a question as ‘thematisch’, he thinks of it as one which is taken seriously and studied in a systematic manner. While we shall often translate this adjective by its cognate, ‘thematic’, we may sometimes find it convenient to choose more flexible expressions involving the word ‘theme’. (Heidegger gives a fuller discussion on H. 363.)</span></p>',
+                          '<p class="calibre_6"><span class="calibre9">4. ‘…als des möglichen Horizontes eines jeden Seinsverständnisses überhaupt…’ Throughout this work the word ‘horizon’ is used with a connotation somewhat different from that to which the English-speaking reader is likely to be accustomed. We tend to think of a horizon as something which we may widen or extend or go beyond; Heidegger, however, seems to think of it rather as something which we can neither widen nor go beyond, but which provides the limits for certain intellectual activities performed ‘within’ it.</span></p>',
+                          '<p class="calibre_6"><span class="calibre9">1. While we shall ordinarily reserve the word ‘falling’ for ‘Verfallen’ (see our note 2, H. 21 above), in this sentence it represents first ‘Verfallen’ and then ‘Fallen’, the usual German word for ‘falling’. ‘Fallen’ and ‘Verfallen’ are by no means strictly synonymous; the latter generally has the further connotation of ‘decay’ or ‘deterioration’, though Heidegger will take pains to point out that in his own usage it ‘does not express any negative evaluation’. See Section 38 below. </span></p>'],
+            'toc': []
+        }
+
+logger = setup_logging()
 
 class ViewerTheme:
     """Vaporwave theme configuration"""
@@ -29,21 +82,68 @@ class ViewerTheme:
     
     # Fonts
     MAIN_FONT = ("VCR OSD Mono", 12)  # Retro font
+    BOLD_FONT = ("VCR OSD Mono", 12, "bold")
     HEADER_FONT = ("VCR OSD Mono", 14, "bold")
     MONO_FONT = ("VCR OSD Mono", 12)
+    SUBHEADER_FONT = ("VCR OSD Mono", 12, "italic")
+
+    JP_FONT = ("Noto Sans JP", 12)
+    BOLD_JP_FONT = ("Noto Sans JP", 12, "bold")
+    JP_HEADER_FONT = ("Noto Sans JP", 14, "bold")
+    VAPORWAVE_FONT = ("VCR OSD Mono", 12)
     
     # Styles
     BUTTON_STYLE = {
-        "font": MAIN_FONT,
+        "font": JP_FONT,
         "bg": ACCENT_COLOR,
         "fg": BG_COLOR,
         "activebackground": SECONDARY_COLOR,
         "activeforeground": FG_COLOR,
-        "relief": tk.FLAT,
-        "borderwidth": 0,
+        "relief": tk.RAISED,
+        "borderwidth": 2,
         "padx": 10,
         "pady": 5
     }
+
+    HOVER_STYLE = {
+        "background": SECONDARY_COLOR,
+        "foreground": ACCENT_COLOR,
+        "font": BOLD_JP_FONT
+    }
+
+    MEDIA_PLAYER_BUTTON_STYLE = {
+        "font": JP_FONT,
+        "bg": FG_COLOR,
+        "fg": SECONDARY_COLOR,
+        "activebackground": ACCENT_COLOR,
+        "activeforeground": BG_COLOR,
+        "relief": tk.RAISED,
+        "borderwidth": 2,
+        "padx": 10,
+        "pady": 5
+    }
+    TOOL_BAR_BUTTON_STYLE = {
+        "font": JP_FONT,
+        "fg": BG_COLOR,
+        "activebackground": SECONDARY_COLOR,
+        "activeforeground": FG_COLOR,
+        "relief": tk.RAISED,
+        "borderwidth": 2,
+        "padx": 10,
+        "pady": 5
+    }
+
+    MENU_BAR_BUTTON_STYLE = {
+        "font": JP_FONT,
+        "fg": SECONDARY_COLOR,
+        "activebackground": ACCENT_COLOR,
+        "activeforeground": BG_COLOR,
+        "relief": tk.RAISED,
+        "borderwidth": 2,
+        "padx": 10,
+        "pady": 5
+    }
+
     
     ENTRY_STYLE = {
         "font": MONO_FONT,
@@ -55,7 +155,7 @@ class ViewerTheme:
     }
     
     TEXT_STYLE = {
-        "font": MAIN_FONT,
+        "font": JP_FONT,
         "bg": BG_COLOR,
         "fg": FG_COLOR,
         "insertbackground": FG_COLOR,
@@ -66,6 +166,151 @@ class ViewerTheme:
         "spacing2": 2,  # Spacing between paragraphs
         "spacing3": 5   # Spacing after paragraphs
     }
+
+    DOCUMENT_STYLE = {
+        "font": MAIN_FONT,
+        "bg": BG_COLOR,
+        "fg": FG_COLOR,
+        "insertbackground": FG_COLOR,
+        "wrap": tk.WORD,
+        "padx": 40,
+        "pady": 20,
+        "spacing1": 10,
+        "spacing2": 2,
+        "spacing3": 10
+    }
+
+class VaporwaveStyle(DialogStyle):
+    # Colors
+    BG_COLOR = "#330066"
+    FG_COLOR = "#FF00FF"
+    SECONDARY_COLOR = "#00FFFF" 
+    ACCENT_COLOR = "#0099FF"
+    
+    # Fonts
+    JP_FONT = ("MS Gothic", 14)
+    BOLD_FONT = ("MS Gothic", 16, "bold")
+    
+    TEXT_STYLE = {
+        "font": JP_FONT,
+        "bg": BG_COLOR,
+        "fg": FG_COLOR,
+        "insertbackground": SECONDARY_COLOR,
+        "selectbackground": ACCENT_COLOR,
+        "relief": "solid",
+        "borderwidth": 1,
+        "highlightthickness": 1,
+        "highlightcolor": SECONDARY_COLOR,
+        "highlightbackground": FG_COLOR
+    }
+    
+    BUTTON_STYLE = {
+        "font": BOLD_FONT,
+        "bg": BG_COLOR,
+        "fg": SECONDARY_COLOR,
+        "activebackground": ACCENT_COLOR,
+        "activeforeground": BG_COLOR,
+        "relief": "raised",
+        "borderwidth": 2,
+        "padx": 15,
+        "pady": 8,
+        "cursor": "hand2"
+    }
+
+@dataclass
+class ViewerText(DialogText):
+    """Vaporwave katakana text constants"""
+    TITLES = {
+        # Main UI
+        "main": "テキストサーチャー  ＴＥＸＴ  ＳＥＡＲＣＨＥＲ",
+        "options": "セッテイ  ＯＰＴＩＯＮＳ",
+        "epub": "イーパブ  セレクター  ＥＰＵＢ",
+        "review": "レビュー  ＲＥＶＩＥＷ",
+        "progress": "ショリチュウ  ＰＲＯＧＲＥＳＳ",
+        "error": "エラー  ＥＲＲＯＲ",
+        "extract": "エ ゥ ツ ラ ク ツ  Ｅ Ｘ Ｔ Ｒ Ａ Ｃ Ｔ",
+        "toc": "コンテンツ  ＴＯＣ",
+        "embedding": "エンベッディング  ＥＭＢＥＤＤＩＮＧ",
+        
+        # Music Player
+        "music": "オンガク  プレーヤー  ＭＵＳＩＣ  ＰＬＡＹＥＲ",
+        "playlist": "プレイリスト  ＰＬＡＹＬＩＳＴ",
+        
+        # Dialogs
+        "pattern_review": "パターン  レビュー",
+        "main_review": "レビュー  ＲＥＶＩＥＷ",
+
+        "collection": "コレクション",
+        "search": "ケンサク  ＳＥＡＲＣＨ"
+    }
+    
+    BUTTONS = {
+        # Main Controls
+        "load": "ロード  ＬＯＡＤ",
+        "save": "セーブ  ＳＡＶＥ",
+        "confirm": "カクニン  ＣＯＮＦＩＲＭ",
+        "cancel": "キャンセル  ＣＡＮＣＥＬ",
+        "delete": "サクジョ  ＤＥＬＥＴＥ",
+        "done": "ワンチュウ  ＤＯＮＥ",
+        "test": "テスト  ＴＥＳＴ",
+        
+        # Music Controls
+        "play": "サイセイ ▶",
+        "pause": "ポーズ  ||",
+        "stop": "テイシ  ■",
+        "next": "ツギヘ  ≫",
+        "prev": "マエヘ  ≪",
+        "music_player": "オンガク  ＭＵＳＩＣ",
+        
+        # Category Selection
+        "headers": "ヘッダー  ＨＥＡＤＥＲＳ",
+        "subheaders": "サブヘッダー  ＳＵＢＨＥＡＤＥＲＳ",
+        "body": "ホンブン  ＢＯＤＹ",
+        "footnotes": "チュウキ  ＦＯＯＴＮＯＴＥＳ",
+        "toc": "コンテンツ  ＴＯＣ"
+    }
+    
+    LABELS = {
+        # Music Player
+        "no_song": "ムジック ナシ  ＮＯ  ＳＯＮＧ",
+        "time": "ジカン  ＴＩＭＥ",
+        
+        # Categories
+        "headers": "ヘッダー  ＨＥＡＤＥＲＳ",
+        "subheaders": "サブヘッダー  ＳＵＢＨＥＡＤＥＲＳ",
+        "toc": "コンテンツ  ＴＯＣ",
+        "body": "ホンブン  ＢＯＤＹ",
+        "footnotes": "チュウキ  ＦＯＯＴＮＯＴＥＳ",
+        
+        # UI Elements
+        "search": "ケンサク  ＳＥＡＲＣＨ",
+        "results": "ケッカ  ＲＥＳＵＬＴＳ",
+        "collections": "コレクション  ＣＯＬＬＥＣＴＩＯＮＳ",
+        "embeddings": "エンベッディング  ＥＭＢＥＤＤＩＮＧＳ",
+        "index": "インデックス  ＩＮＤＥＸ",
+        "select": "センタク  ＳＥＬＥＣＴ",
+        "processing": "ショリチュウ  ＰＲＯＣＥＳＳＩＮＧ",
+        "extracting": "エ ゥ ツ ラ ク ツ  ＥＸＴＲＡＣＴ I N G",
+        "pattern": "パターン  ＰＡＴＴＥＲＮ",
+        "matches": "マッチ  ＭＡＴＣＨＥＳ",
+        "conflicts": "コンフリクト  ＣＯＮＦＬＩＣＴＳ",
+        "false_positives": "ギマッチ  ＦＡＬＳＥ ＰＯＳＩＴＩＶＥＳ",
+        "total_items": "アイテムゴウケイ  ＴＯＴＡＬ: {}",
+        "items_count": "アイテム  ＩＴＥＭＳ: {}/{}",
+        "search": "ケンサク  ＳＥＡＲＣＨ...",
+    }
+    
+    MESSAGES = {
+        "load_error": "エラー：ロードデキマセン  ＬＯＡＤ  ＥＲＲＯＲ",
+        "process_error": "エラー：ショリチュウデキマセン  ＰＲＯＣＥＳＳ  ＥＲＲＯＲ",
+        "traceback": "トレースバック  ＴＲＡＣＥＢＡＣＫ",
+        "save_success": "セーブ  カンリョウ  ＳＡＶＥ  ＣＯＭＰＬＥＴＥ",
+        "processing": "ショリチュウ...  ＰＲＯＣＥＳＳＩＮＧ...",
+        "no_selection": "センタクガ アリマセン  ＮＯ  ＳＥＬＥＣＴＩＯＮ",
+        "confirm_delete": "サクジョ カクニン {} アイテム{}?",
+        "error_general": "エラー：{}"
+    }
+
 
 class VaporwaveDesktop(tk.Toplevel):
     """Desktop background window with animated GIFs"""

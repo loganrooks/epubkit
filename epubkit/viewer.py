@@ -312,53 +312,344 @@ class ViewerText(DialogText):
     }
 
 
+
 class VaporwaveDesktop(tk.Toplevel):
     """Desktop background window with animated GIFs"""
+    
+    SCREEN_WIDTH = 1920
+    SCREEN_HEIGHT = 1080
+    SCREEN_X_OFFSET = 1080
+    SCREEN_Y_OFFSET = 840
+    CELL_SIZE = 50
+    GRID_SPACING = 20
+    
     def __init__(self):
         super().__init__()
-        self.gifs = []
-        self.gif_labels = []
-        self.current_frame = 0
-        self.images = {}  # Store image references
-        
-        # Configure window
+        self.animations_enabled = True
+
+        self.setup_window()
+        self.setup_canvas()
+        self.setup_resources()
+        self.start_animations()
+
+    def setup_window(self):
+        """Configure main window"""
+        self.title("ＶＡＰＯＲＷＡＶＥ  ＤＥＳＫＴＯＰ")
+        self.geometry(f"{self.SCREEN_WIDTH}x{self.SCREEN_HEIGHT}+{self.SCREEN_X_OFFSET}+{self.SCREEN_Y_OFFSET}")
         self.attributes('-fullscreen', True)
-        self.overrideredirect(True)  # Remove window decorations
-        self.attributes('-topmost', False)  # Stay behind other windows
-        
-        self.setup_desktop()
-        
-    def setup_desktop(self):
-        # Set up background
-        bg_path = Path("resources/desktops/windows-xp.jpg")
-        bg_image = Image.open(bg_path)
-        self.images['bg'] = ImageTk.PhotoImage(bg_image)
-        
-        bg_label = tk.Label(self, image=self.images['bg'])
-        bg_label.place(x=0, y=0, relwidth=1, relheight=1)
-        
-        # Load GIFs
-        gif_paths = glob.glob("resources/gifs/*.gif")
-        for i, path in enumerate(gif_paths):
-            gif = Image.open(path)
-            frames = []
-            try:
-                while True:
-                    frame = ImageTk.PhotoImage(gif.copy())
-                    frames.append(frame)
-                    self.images[f'gif_{i}_frame_{len(frames)}'] = frame
-                    gif.seek(len(frames))
-            except EOFError:
-                pass
-            self.gifs.append(frames)
+        self.overrideredirect(True)
+        self.lower()
+
+        # Set proper window type
+        if sys.platform.startswith('linux'):
+            self.attributes('-type', 'dock')
+
+    def toggle_animations(self, enabled: bool):
+        """Enable/disable GIF animations"""
+        self.animations_enabled = enabled
+        if not enabled:
+            # Stop all current animations
+            self.canvas.delete("gif")
+            self.grid_cells.clear()
+            self.after_cancel(self._next_gif_id)
+        else:
+            # Restart animation loop
+            self.display_random_gif()
+
+    def setup_canvas(self):
+        self.canvas = tk.Canvas(
+            self, 
+            width=self.SCREEN_WIDTH,
+            height=self.SCREEN_HEIGHT,
+            highlightthickness=0,
+        )
+        self.canvas.pack(expand=True, fill=tk.BOTH)
+
+
+        # Initialize state
+        self.gifs = []
+        self.images = {}
+        self.grid_cells = {}
+        self.bg_index = 0
+
+    def setup_resources(self):
+        """Initialize resources"""
+        self.resource_path = Path(__file__).parent.resolve() / 'resources'
+        print(f"Resource path: {self.resource_path}")  # Debug
+
+        # Setup directories
+        for dir_name in ['backgrounds', 'gifs']:
+            dir_path = self.resource_path / dir_name
+            dir_path.mkdir(parents=True, exist_ok=True)
             
-            label = tk.Label(self)
-            label.bind("<Button-1>", self.start_drag)
-            label.bind("<B1-Motion>", self.drag)
-            self.gif_labels.append(label)
+        # Load backgrounds
+        self.bg_paths = []
+        bg_dir = self.resource_path / 'backgrounds'
+        for fmt in ['*.jpg', '*.jpeg', '*.png', '*.webp']:
+            self.bg_paths.extend(list(bg_dir.glob(fmt)))
+            
+        if not self.bg_paths:
+            self.create_default_backgrounds(bg_dir)
+            self.bg_paths = list(bg_dir.glob('*.jpg'))
+            
+        # Load GIFs
+        gif_dir = self.resource_path / 'gifs'
+        if not any(gif_dir.glob('*.gif')):
+            self.create_test_gif(gif_dir)
+        self.create_gifs(gif_dir)
+
+
+    def start_animations(self):
+        """Start all animation loops"""
+        self.update_background()  # Start background cycling
+        # self.draw_grid()  # Create initial grid
+        # self.update_scanlines()  # Start scanline animation
+        self.display_random_gif()  # Start GIF displays
+
+
+
+    def update_background(self):
+        """Cycle background images"""
+        try:
+            bg_path = self.bg_paths[self.bg_index]
+            image = Image.open(bg_path).resize(
+                (self.SCREEN_WIDTH, self.SCREEN_HEIGHT),
+                Image.Resampling.LANCZOS
+            )
+            photo = ImageTk.PhotoImage(image)
+            self.images['current_bg'] = photo
+            
+            if not hasattr(self, 'bg_container'):
+                self.bg_container = self.canvas.create_image(
+                    0, 0, image=photo, anchor='nw'
+                )
+            else:
+                self.canvas.itemconfig(self.bg_container, image=photo)
+
+
+                
+            self.bg_index = (self.bg_index + 1) % len(self.bg_paths)
+            self.after(120000, self.update_background)
+            
+        except Exception as e:
+            print(f"Background update error: {e}")
+
+    def update_scanlines(self):
+        """Animate scanline effect"""
+        self.canvas.delete("scanline")
+        offset = time.time() * 50 % self.GRID_SPACING
         
-        self.cycle_gifs()
-        self.animate_gifs()
+        for y in range(int(-offset), self.SCREEN_HEIGHT, self.GRID_SPACING):
+            self.canvas.create_line(
+                0, y, self.SCREEN_WIDTH, y,
+                fill=ViewerTheme.SECONDARY_COLOR,
+                stipple="gray50",
+                tags="scanline"
+            )
+        
+        self.after(50, self.update_scanlines)
+
+    def draw_grid(self):
+        """Draw cyberpunk grid"""
+        for x in range(0, self.SCREEN_WIDTH, self.GRID_SPACING):
+            self.canvas.create_line(
+                x, 0, x, self.SCREEN_HEIGHT,
+                fill=ViewerTheme.SECONDARY_COLOR,
+                stipple="gray50",
+                tags="grid"
+            )
+            
+        for y in range(0, self.SCREEN_HEIGHT, self.GRID_SPACING):
+            self.canvas.create_line(
+                0, y, self.SCREEN_WIDTH, y,
+                fill=ViewerTheme.SECONDARY_COLOR,
+                stipple="gray50",
+                tags="grid"
+            )
+
+    def cleanup(self):
+        """Clean up resources"""
+        for canvas in [self.canvas]:
+            canvas.delete("all")
+        self.images.clear()
+        self.gifs.clear()
+
+
+    def create_gifs(self, gif_dir: Path):   
+        """Load and process GIF files"""
+        gif_files = list(gif_dir.glob('*.gif'))
+        print(f"Found GIFs: {gif_files}")
+        self.gifs = []
+        
+        for gif_file in gif_files:
+            frames = []
+            with Image.open(gif_file) as gif:
+                # Get frame durations
+                durations = []
+                for frame in range(gif.n_frames):
+                    gif.seek(frame)
+                    duration = max([gif.info.get('duration', 100), 100])
+                    durations.append(duration)
+                    # Convert to RGBA and maintain transparency
+                    frame_image = gif.convert('RGBA')
+                    # Create PhotoImage with transparency
+                    photo = ImageTk.PhotoImage(frame_image)
+                    frames.append((photo, durations[frame]))
+                    
+            if frames:
+                self.gifs.append(frames)
+                
+        print(f"Loaded {len(self.gifs)} GIFs with transparency")
+
+    def update_gif(self, gif_tag: int, frames: List[Tuple[PhotoImage, int]], frame_index: int):
+        """Update GIF frame with proper timing"""
+        frame, duration = frames[frame_index]
+        frame_index = (frame_index + 1) % len(frames)
+         # Update canvas
+        
+        # Update canvas
+        self.canvas.itemconfig(gif_tag, image=frame)
+        # self.canvas.tag_raise(gif_tag)  
+     
+        # Schedule next frame using frame's duration
+        self.after(duration, self.update_gif, gif_tag, frames, frame_index)
+
+    def find_free_space(self, gif_width: int, gif_height: int) -> Optional[Tuple[int, int]]:
+        """Find unoccupied space for GIF"""
+        current_time = time.time()
+        
+        # Clear expired cells
+        expired = [pos for pos, (_, _, expiry) in self.grid_cells.items() 
+                  if current_time > expiry]
+        for pos in expired:
+            del self.grid_cells[pos]
+            
+        # Calculate grid dimensions
+        screen_width = 1920
+        screen_height = 1080
+        cols = screen_width // self.CELL_SIZE
+        rows = screen_height // self.CELL_SIZE
+        
+        # Calculate cells needed
+        cells_w = (gif_width + self.CELL_SIZE - 1) // self.CELL_SIZE
+        cells_h = (gif_height + self.CELL_SIZE - 1) // self.CELL_SIZE
+        
+        x_indices = list(range(cols - cells_w + 1))
+        y_indices = list(range(rows - cells_h + 1))
+        random.shuffle(x_indices)
+        random.shuffle(y_indices)   
+        # Find free space
+        for y in y_indices:
+            for x in x_indices:
+                if self.is_space_free(x, y, cells_w, cells_h):
+                    return (x * self.CELL_SIZE, y * self.CELL_SIZE)
+                    
+        return None
+        
+    def is_space_free(self, start_x: int, start_y: int, width: int, height: int) -> bool:
+        """Check if grid space is available"""
+        current_time = time.time()
+        
+        for y in range(start_y, start_y + height):
+            for x in range(start_x, start_x + width):
+                if (x, y) in self.grid_cells:
+                    if current_time <= self.grid_cells[(x, y)][2]:
+                        return False
+        return True
+        
+    def display_random_gif(self, displayed: list = None):
+        """Display random GIF in free space"""
+        if displayed is None:
+            displayed = []
+            
+        if not self.gifs:
+            return
+
+        if not self.animations_enabled:
+            return
+            
+        # Select random GIF
+        available = [i for i in range(len(self.gifs)) if i not in displayed]
+        if not available:
+            return
+            
+        gif_id = random.choice(available)
+        frames = self.gifs[gif_id]
+        
+        width = frames[0][0].width()
+        height = frames[0][0].height()
+        position = self.find_free_space(width, height)
+        if position is None:
+            logging.warning("No space available")
+            next_time = random.randint(8000, 12000)
+            self.after(next_time, self.display_random_gif, displayed)
+            return
+            
+        x, y = position
+        
+        print(f"Displaying GIF sized {width}x{height} at {x}, {y}")
+          # Create label with system-specific transparent background
+        
+
+        gif_tag = self.canvas.create_image(x, y, image=frames[0][0], anchor='nw')
+
+        
+        # Mark space as occupied
+        cells_w = (width + self.CELL_SIZE - 1) // self.CELL_SIZE
+        cells_h = (height + self.CELL_SIZE - 1) // self.CELL_SIZE
+        expiry_time = time.time() + random.randint(20, 30)
+        
+        for grid_y in range(y // self.CELL_SIZE, (y + height) // self.CELL_SIZE + 1):
+            for grid_x in range(x // self.CELL_SIZE, (x + width) // self.CELL_SIZE + 1):
+                self.grid_cells[(grid_x, grid_y)] = (width, height, expiry_time)
+        
+
+        # Start animation
+        self.update_gif(gif_tag, frames, 0)
+        displayed.append(gif_id)
+        
+        # Schedule cleanup
+        duration = random.randint(25000, 40000)
+        self.after(duration, lambda: self._cleanup_gif(gif_tag, gif_id, displayed))
+        
+        # Schedule next GIF
+        next_time = random.randint(10000, 15000)
+        self._next_gif_id = self.after(next_time, self.display_random_gif, displayed)
+
+
+    def _cleanup_gif(self, gif_tag: int, gif_id, displayed: list):
+        """Clean up GIF display"""
+        self.canvas.delete(gif_tag)
+        if gif_id in displayed:
+            displayed.remove(gif_id)
+
+            
+    def create_default_backgrounds(self, bg_dir: Path):
+        """Create default background images"""
+        colors = ['#000066', '#330066', '#660066', '#990066']
+        for i, color in enumerate(colors):
+            img = Image.new('RGB', (1920, 1080), color)
+            img.save(bg_dir / f'bg_{i}.jpg')
+            
+
+    def create_test_gif(self, gif_dir: Path):
+        """Create a test animated GIF"""
+        gif_path = gif_dir / 'test.gif'
+        frames = []
+        colors = ['red', 'blue', 'green']
+        for color in colors:
+            img = Image.new('RGB', (100, 100), color)
+            frames.append(img)
+            
+        frames[0].save(
+            gif_path,
+            save_all=True,
+            append_images=frames[1:],
+            duration=500,
+            loop=0
+        )
+        print(f"Created test GIF at {gif_path}")
+
         
     def start_drag(self, event):
         widget = event.widget
@@ -370,26 +661,7 @@ class VaporwaveDesktop(tk.Toplevel):
         x = widget.winfo_x() + event.x - widget._drag_start_x
         y = widget.winfo_y() + event.winfo_y() - widget._drag_start_y
         widget.place(x=x, y=y)
-        
-    def cycle_gifs(self):
-        # Randomly show/hide GIFs every minute
-        for label in self.gif_labels:
-            if random.random() > 0.5:
-                x = random.randint(0, self._root().winfo_width() - 200)
-                y = random.randint(0, self._root().winfo_height() - 200)
-                label.place(x=x, y=y)
-            else:
-                label.place_forget()
-        self._root().after(60000, self.cycle_gifs)
-        
-    def animate_gifs(self):
-        # Animate visible GIFs
-        for i, label in enumerate(self.gif_labels):
-            if label.winfo_viewable():
-                frames = self.gifs[i]
-                label.configure(image=frames[self.current_frame % len(frames)])
-        self.current_frame += 1
-        self._root().after(100, self.animate_gifs)
+
 
 class SearchToolbar(ttk.Frame):
     """Enhanced search toolbar with live suggestions"""

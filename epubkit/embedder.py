@@ -3,7 +3,7 @@ import abc
 import torch  # type: ignore
 import torch.nn as nn # type: ignore
 import numpy as np
-from typing import Dict, List, Type, Any, Protocol, Optional, Iterator
+from typing import Callable, Dict, List, Type, Any, Protocol, Optional, Iterator
 from pathlib import Path
 from dataclasses import dataclass, field
 from collections import Counter
@@ -15,7 +15,8 @@ import nltk
 from nltk.tokenize import word_tokenize
 from openai import OpenAI
 from transformers import AutoModel, AutoTokenizer 
-import torch.nn.functional as F  # type: ignore
+import torch.nn.functional as F
+import transformers  # type: ignore
 
 # Download NLTK data
 nltk.download('punkt', quiet=True)
@@ -301,129 +302,128 @@ class OpenAIEmbedder(BaseTrainableEmbedder):
             model_id = f.read().strip()
         return cls(fine_tuned_model=model_id)
 
-# class HuggingFaceEmbedder(BaseTrainableEmbedder):
-    # """HuggingFace model-based embeddings with fine-tuning support"""
-    # def __init__(
-    #     self, 
-    #     model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
-    #     max_length: int = 512,
-    #     pooling_strategy: str = "mean"
-    # ):
-    #     self.model_name = model_name
-    #     self.max_length = max_length
-    #     self.pooling_strategy = pooling_strategy
-    #     self.model = AutoModel.from_pretrained(model_name)
-    #     self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-    #     self._dim = self.model.config.hidden_size
+class HuggingFaceEmbedder(BaseTrainableEmbedder):
+    """HuggingFace model-based embeddings with fine-tuning support"""
+    def __init__(
+        self, 
+        model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
+        max_length: int = 512,
+        pooling_strategy: str = "mean"
+    ):
+        self.model_name = model_name
+        self.max_length = max_length
+        self.pooling_strategy = pooling_strategy
+        self.model = AutoModel.from_pretrained(model_name)
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        self._dim = self.model.config.hidden_size
         
-    # def _pool_embeddings(
-    #     self, 
-    #     token_embeddings: torch.Tensor, 
-    #     attention_mask: torch.Tensor
-    # ) -> torch.Tensor:
-    #     """Pool token embeddings to sentence embedding"""
-    #     if self.pooling_strategy == "mean":
-    #         # Mean pooling with attention mask
-    #         input_mask_expanded = attention_mask.unsqueeze(-1).expand(
-    #             token_embeddings.size()
-    #         ).float()
-    #         return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(
-    #             input_mask_expanded.sum(1), min=1e-9
-    #         )
-    #     elif self.pooling_strategy == "cls":
-    #         # Use [CLS] token embedding
-    #         return token_embeddings[:, 0]
-    #     else:
-    #         raise ValueError(f"Unknown pooling strategy: {self.pooling_strategy}")
+    def _pool_embeddings(
+        self, 
+        token_embeddings: torch.Tensor, 
+        attention_mask: torch.Tensor
+    ) -> torch.Tensor:
+        """Pool token embeddings to sentence embedding"""
+        if self.pooling_strategy == "mean":
+            # Mean pooling with attention mask
+            input_mask_expanded = attention_mask.unsqueeze(-1).expand(
+                token_embeddings.size()
+            ).float()
+            return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(
+                input_mask_expanded.sum(1), min=1e-9
+            )
+        elif self.pooling_strategy == "cls":
+            # Use [CLS] token embedding
+            return token_embeddings[:, 0]
+        else:
+            raise ValueError(f"Unknown pooling strategy: {self.pooling_strategy}")
     
-    # def embed_text(self, text: str) -> npt.NDArray[np.float32]:
-    #     # Tokenize and encode
-    #     inputs = self.tokenizer(
-    #         text,
-    #         max_length=self.max_length,
-    #         padding=True,
-    #         truncation=True,
-    #         return_tensors="pt"
-    #     )
+    def embed_text(self, text: str) -> npt.NDArray[np.float32]:
+        # Tokenize and encode
+        inputs = self.tokenizer(
+            text,
+            max_length=self.max_length,
+            padding=True,
+            truncation=True,
+            return_tensors="pt"
+        )
         
-    #     # Get embeddings
-    #     with torch.no_grad():
-    #         outputs = self.model(**inputs)
-    #         embeddings = self._pool_embeddings(
-    #             outputs.last_hidden_state,
-    #             inputs["attention_mask"]
-    #         )
+        # Get embeddings
+        with torch.no_grad():
+            outputs = self.model(**inputs)
+            embeddings = self._pool_embeddings(
+                outputs.last_hidden_state,
+                inputs["attention_mask"]
+            )
             
-    #     return F.normalize(embeddings, p=2, dim=1).numpy()
+        return F.normalize(embeddings, p=2, dim=1).numpy()
     
-    # def embed_texts(self, texts: List[str]) -> npt.NDArray[np.float32]:
-    #     # Batch process texts
-    #     inputs = self.tokenizer(
-    #         texts,
-    #         max_length=self.max_length,
-    #         padding=True,
-    #         truncation=True,
-    #         return_tensors="pt"
-    #     )
+    def embed_texts(self, texts: List[str]) -> npt.NDArray[np.float32]:
+        # Batch process texts
+        inputs = self.tokenizer(
+            texts,
+            max_length=self.max_length,
+            padding=True,
+            truncation=True,
+            return_tensors="pt"
+        )
         
-    #     # Get embeddings
-    #     with torch.no_grad():
-    #         outputs = self.model(**inputs)
-    #         embeddings = self._pool_embeddings(
-    #             outputs.last_hidden_state,
-    #             inputs["attention_mask"]
-    #         )
+        # Get embeddings
+        with torch.no_grad():
+            outputs = self.model(**inputs)
+            embeddings = self._pool_embeddings(
+                outputs.last_hidden_state,
+                inputs["attention_mask"]
+            )
             
-    #     return F.normalize(embeddings, p=2, dim=1).numpy()
+        return F.normalize(embeddings, p=2, dim=1).numpy()
     
-    # def train(self, texts: List[str], config: TrainingConfig) -> Dict[str, float]:
-    #     """Fine-tune the model on texts"""
-    #     # Setup training configurations
-    #     training_args = transformers.TrainingArguments(
-    #         output_dir="./results",
-    #         num_train_epochs=config.num_epochs,
-    #         per_device_train_batch_size=config.batch_size,
-    #         learning_rate=config.learning_rate,
-    #         **config.extra_params
-    #     )
+    def train(self, texts: List[str], config: TrainingConfig) -> Dict[str, float]:
+        """Fine-tune the model on texts"""
+        # Setup training configurations
+        training_args = transformers.TrainingArguments(
+            output_dir="./results",
+            num_train_epochs=config.num_epochs,
+            per_device_train_batch_size=config.batch_size,
+            learning_rate=config.learning_rate,
+            **config.extra_params
+        )
         
-    #     # Prepare dataset
-    #     dataset = self._prepare_dataset(texts)
+        # Prepare dataset
+        dataset = self._prepare_dataset(texts)
         
-    #     # Train
-    #     trainer = transformers.Trainer(
-    #         model=self.model,
-    #         args=training_args,
-    #         train_dataset=dataset
-    #     )
+        # Train
+        trainer = transformers.Trainer(
+            model=self.model,
+            args=training_args,
+            train_dataset=dataset
+        )
         
-    #     result = trainer.train()
-    #     return {"loss": result.training_loss}
+        result = trainer.train()
+        return {"loss": result.training_loss}
     
-    # def save_model(self, path: Path) -> None:
-    #     """Save model and tokenizer"""
-    #     self.model.save_pretrained(path)
-    #     self.tokenizer.save_pretrained(path)
+    def save_model(self, path: Path) -> None:
+        """Save model and tokenizer"""
+        self.model.save_pretrained(path)
+        self.tokenizer.save_pretrained(path)
         
-    # @classmethod
-    # def load_model(cls, path: Path) -> 'HuggingFaceEmbedder':
-    #     """Load saved model"""
-    #     instance = cls()
-    #     instance.model = AutoModel.from_pretrained(path)
-    #     instance.tokenizer = AutoTokenizer.from_pretrained(path)
-    #     return instance
+    @classmethod
+    def load_model(cls, path: Path) -> 'HuggingFaceEmbedder':
+        """Load saved model"""
+        instance = cls()
+        instance.model = AutoModel.from_pretrained(path)
+        instance.tokenizer = AutoTokenizer.from_pretrained(path)
+        return instance
     
-    # @property
-    # def embedding_dim(self) -> int:
-    #     return self._dim
+    @property
+    def embedding_dim(self) -> int:
+        return self._dim
 
 class EmbeddingFactory:
     """Factory for creating embedding providers"""
     _providers: Dict[str, Type[BaseEmbeddingProvider]] = {
         'openai': OpenAIEmbedder,
-        # 'glove': GloVeEmbedder,
-        # 'huggingface': HuggingFaceEmbedder,
-        # 'sentence-transformer': SentenceTransformerEmbedder
+        'glove': GloVeEmbedder,
+        'huggingface': HuggingFaceEmbedder
     }
     
     @classmethod

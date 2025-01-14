@@ -721,51 +721,35 @@ class SearchToolbar(ttk.Frame):
         self.setup_ui()
         
     def setup_ui(self):
-        # Search box with icon
-        search_frame = ttk.Frame(self)
-        search_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(10, 5))
-        
+        # Search box with compact styling
         self.search_var = tk.StringVar()
-        self.search_entry = tk.Entry(
-            search_frame,
+        self.search_entry = ttk.Entry(
+            self,
             textvariable=self.search_var,
-            width=40,
-            font=('MS Gothic', 12)
+            width=30
         )
-        self.search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.search_entry.pack(side=tk.LEFT, padx=5, pady=5)
         
-        # Category filter
-        self.category_var = tk.StringVar(value="all")
-        self.category_menu = tk.OptionMenu(
+        # Category dropdown
+        self.category_var = tk.StringVar(value="All")
+        self.category_menu = ttk.OptionMenu(
             self,
             self.category_var,
-            "Ａｌｌ",  # Fullwidth text
-            "Ｈｅａｄｅｒｓ", 
-            "Ｂｏｄｙ",
-            "Ｆｏｏｔｎｏｔｅｓ"
+            "All",
+            "Headers",
+            "Body",
+            "Footnotes"
         )
         self.category_menu.pack(side=tk.LEFT, padx=5)
-
-        self.category_menu.config(
-            width=15,
-            font=('MS Gothic', 10),
-            foreground='#ff71ce',  # Vaporwave pink
-            background='#080428'   # Dark purple
-        )
         
-        # Search button
-        self.search_button = tk.Button(
+        # Compact search button
+        self.search_button = ttk.Button(
             self,
             text="Search",
-            width=100,
-            height=35,
-            command=self.on_search
+            command=self.on_search,
+            width=10
         )
         self.search_button.pack(side=tk.LEFT, padx=5)
-        
-        # Bind events
-        self.search_entry.bind("<Return>", lambda e: self.on_search())
-        self.search_var.trace_add("write", self.on_search_change)
     
     def on_search(self):
         """Override this method to handle search"""

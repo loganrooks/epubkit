@@ -990,3 +990,324 @@ def test_empty_input():
     assert extract_supervised_patterns({}) == {'status': 'success', 'patterns': {}}
     assert extract_unsupervised_patterns("") == {}
 
+
+import pytest
+from bs4 import BeautifulSoup
+from pathlib import Path
+from epubkit.parser import TOCExtractor, TOCEntry
+
+@pytest.fixture
+def heidegger_toc():
+    """Load Heidegger TOC HTML fixture"""
+    return """<body class="calibre">
+    <h1 id="filepos100" class="calibre_">Contents</h1><ul class="calibre1">
+    <li class="calibre2"><a href="index_split_004.html#filepos18830">TRANSLATORS’ PREFACE </a></li>
+    <li class="calibre2"><a href="index_split_005.html#filepos30542">AUTHOR’S PREFACE TO THE SEVENTH GERMAN EDITION </a></li>
+    <li class="calibre2"><a href="index_split_007.html#filepos40983">INTRODUCTION: EXPOSITION OF THE QUESTION OF THE MEANING OF BEING </a></li>
+        <ul class="calibre3"><li class="calibre2"><a href="index_split_008.html#filepos41583">I: THE NECESSITY, STRUCTURE, AND PRIORITY OF THE QUESTION OF BEING </a></li>
+            <ul class="calibre4">
+                <li class="calibre2"><a href="index_split_008.html#filepos41760">1. The Necessity for Explicitly Restating the Question of Being </a></li>
+            </ul>
+        </ul>
+    </ul></body>"""
+
+@pytest.fixture
+def plato_toc():
+    """Load Plato TOC HTML fixture"""
+    return """
+    <body>
+<p class="ch"><a id="page_v"/><i>XXXXXXXXXXXXX</i></p>
+<p class="centera"><a href="07_Foreword.xhtml"><small>TRANSLATORS' FOREWORD</small></a></p>
+<p class="center"><a href="08_Part01.xhtml"><b>PREPARATORY PART</b></a></p>
+<p class="center"><a href="08_Part01.xhtml"><i><b>The Essence of Philosophy and the Question of Truth</b></i></a></p>
+<p class="toc"><a href="09_Chapter01.xhtml"><b>Chapter One</b>  Preliminary Interpretation of the Essence of Philosophy</a></p>
+<p class="toca"><a href="09_Chapter01.xhtml#ch1_1"><i><b>§  1. Futural philosophy; restraint as the basic disposition of the relation to Being</b></i> [<b>Seyn</b>]</a></p>
+<p class="toca"><a href="09_Chapter01.xhtml#ch1_2"><i><b>§  2.  Philosophy as the immediately useless, though sovereign, knowledge of the essence of beings</b></i></a></p>
+<p class="toca"><a href="09_Chapter01.xhtml#ch1_3"><i><b>§  3.  Questioning the truth of Being, as sovereign knowledge</b></i></a></p>
+<p class="toc"><a href="10_Chapter02.xhtml"><b>Chapter Two</b>  The Question of Truth as a Basic Question</a></p>
+<p class="toca"><a href="10_Chapter02.xhtml#ch2_1"><i><b>§  4.  Truth as a “problem” of “logic” (correctness of an assertion) distorts every view of the essence of truth</b></i></a></p>
+<p class="toca"><a href="10_Chapter02.xhtml#ch2_2"><i><b>§  5.  Discussion of truth by asking the basic question of philosophy, including a historical confrontation with Western philosophy. The need and the necessity of an original questioning</b></i></a></p>
+<p class="toc1"><a id="page_vi"/><a href="10_Chapter02.xhtml#ch2_3"><small>RECAPITULATION</small></a></p>
+<p class="toc2"><a href="10_Chapter02.xhtml#ch2_4">1)  The question of truth as the most necessary philosophical question in an age that is totally unquestioning</a></p>
+<p class="toc2"><a href="10_Chapter02.xhtml#ch2_5">2)  What is worthy of questioning in the determination of truth hitherto (truth as the correctness of an assertion) as compelling us toward the question of truth</a></p>
+<p class="toca"><a href="10_Chapter02.xhtml#ch2_6"><i><b>§  6.  The traditional determination of truth as correctness</b></i></a></p>
+<p class="toca"><a href="10_Chapter02.xhtml#ch2_7"><i><b>§  7.  The controversy between idealism and realism on the common soil of a conception of truth as the correctness of a representation</b></i></a></p>
+<p class="toca"><a href="10_Chapter02.xhtml#ch2_8"><i><b>§  8.  The space of the fourfold-unitary openness. First directive toward what is worthy of questioning in the traditional determination of truth as correctness</b></i></a></p>
+<p class="toca"><a href="10_Chapter02.xhtml#ch2_9"><i><b>§  9.  The conception of truth and of the essence of man. The basic question of truth</b></i></a></p>
+<p class="toc2"><a href="10_Chapter02.xhtml#ch2_10">a)  The determination of the essence of truth as connected to the determination of the essence of man</a></p>
+<p class="toc2"><a href="10_Chapter02.xhtml#ch2_11">b)  The question of the ground of the possibility of all correctness as the basic question of truth</a></p>
+<p class="toc1"><a href="10_Chapter02.xhtml#ch2_12"><small>RECAPITULATION</small></a></p>
+<p class="toc2"><a href="10_Chapter02.xhtml#ch2_13">1)  The relation between question and answer in the domain of philosophy</a></p>
+<p class="toc2"><a href="10_Chapter02.xhtml#ch2_14">2)  The customary determination of truth as correctness of representation, and the fourfold-unitary openness as the question-worthy ground of the possibility of the correctness of representation</a></p>
+<p class="toc2"><a id="page_vii"/><a href="10_Chapter02.xhtml#ch2_15">c)  The question of truth as the most questionable of our previous history and the most worthy of questioning of our future history</a></p>"""
+
+@pytest.fixture
+def toc_extractor():
+    """Create TOCExtractor instance with mock EPUB"""
+    epub_path = str(Path("/home/rookslog/epubkit/epubkit/resources/epubs/Being and Time - Martin Heidegger.epub"))
+    return TOCExtractor(str(epub_path))
+
+class TestTOCIdentification:
+    def test_finds_toc_by_title(self, toc_extractor, heidegger_toc):
+        """Test finding TOC page by 'Contents' title"""
+        # Mock book items
+        toc_extractor.book.get_items_of_type = lambda x: [
+            type('MockItem', (), {
+                'get_content': lambda: heidegger_toc.encode(),
+                'file_name': 'toc.html'
+            })
+        ]
+        
+        candidates = toc_extractor.find_toc_candidates()
+        assert len(candidates) == 1
+        assert candidates[0][0] == 'toc.html'
+
+    def test_finds_toc_by_structure(self, toc_extractor: TOCExtractor, plato_toc):
+        """Test finding TOC by hierarchical links"""
+        # Mock book items 
+        toc_extractor.book.get_items_of_type = lambda x: [
+            type('MockItem', (), {
+                'get_content': lambda: plato_toc.encode(),
+                'file_name': 'toc.html'
+            })
+        ]
+        
+        candidates = toc_extractor.find_toc_candidates()
+        assert len(candidates) == 1
+
+class TestPatternMatching:
+    def test_matches_heidegger_patterns(self, toc_extractor):
+        """Test matching Heidegger TOC patterns"""
+        tag = BeautifulSoup("""<li class="calibre2">
+            <a href="#">Test</a>
+        </li>""", 'html.parser').li
+        
+        pattern = {
+            'tag': 'li',
+            'classes': ['calibre2']
+        }
+        
+        assert toc_extractor._matches_toc_pattern(tag, pattern)
+
+    def test_matches_plato_patterns(self, toc_extractor):
+        """Test matching Plato TOC patterns"""
+        tag = BeautifulSoup("""<p class="FM_TocAHead">
+            <a href="#">Test</a>
+        </p>""", 'html.parser').p
+        
+        pattern = {
+            'tag': 'p',
+            'classes': ['FM_TocAHead']
+        }
+        
+        assert toc_extractor._matches_toc_pattern(tag, pattern)
+
+class TestStructureExtraction:
+    def test_heidegger_hierarchy(self, toc_extractor: TOCExtractor, heidegger_toc):
+        """Test extracting nested hierarchy from Heidegger format"""
+        toc_extractor.set_toc_page(heidegger_toc)
+        
+        patterns = {
+            0: {'tag': 'li', 'classes': ['calibre2']},
+            1: {'tag': 'li', 'classes': ['calibre2']},
+            2: {'tag': 'li', 'classes': ['calibre2']}
+        }
+        
+        entries = toc_extractor.extract_toc_structure(patterns)
+        
+        assert len(entries) == 3  # Top level entry
+        assert len(entries[2].children) == 1  # Second level
+        assert len(entries[2].children[0].children) == 1  # Third level
+
+    def test_plato_hierarchy(self, toc_extractor, plato_toc):
+        """Test extracting hierarchy from Plato format"""
+        toc_extractor.set_toc_page(plato_toc)
+        
+        patterns = {
+            0: {'tag': 'p', 'classes': ['FM_TocPart']},
+            1: {'tag': 'p', 'classes': ['FM_TocAHead']},
+            2: {'tag': 'p', 'classes': ['FM_TocBHead']}
+        }
+        
+        entries = toc_extractor.extract_toc_structure(patterns)
+        
+        assert len(entries) == 1
+        assert entries[0].title == "Preliminary Considerations"
+        assert entries[0].children[0].title == "§1 First Chapter"
+
+class TestTextExtraction:
+    def test_extracts_text_blocks(self, toc_extractor):
+        """Test extracting text blocks for entries"""
+        # Mock book content
+        toc_extractor.book.get_items_of_type = lambda x: [
+            type('MockItem', (), {
+                'get_content': lambda: b"""
+                    <p>Valid text block</p>
+                    <p>Another block</p>
+                    <p class="pagenum">123</p>
+                """,
+                'file_name': 'content.html'
+            })
+        ]
+        
+        entry = TOCEntry(
+            title="Test Entry",
+            href="content.html",
+            level=0
+        )
+        
+        toc_extractor.toc_structure = [entry]
+        toc_extractor.extract_text_blocks()
+        
+        assert len(entry.text_blocks) == 2
+        assert "Valid text block" in entry.text_blocks[0]
+        assert "Another block" in entry.text_blocks[1]
+
+class TestArtifactFiltering:
+    def test_filters_artifacts(self, toc_extractor):
+        """Test filtering out common artifacts"""
+        artifacts = [
+            "123",  # Page number
+            "",  # Empty line
+            "•",  # Bullet
+            "IV",  # Roman numeral
+            "\x0c"  # Page break
+        ]
+        
+        for artifact in artifacts:
+            assert toc_extractor._is_artifact(artifact)
+
+    def test_keeps_valid_text(self, toc_extractor):
+        """Test keeping valid text content"""
+        valid_texts = [
+            "Regular paragraph text",
+            "Chapter 1: Introduction",
+            "Section 1.2 Details"
+        ]
+        
+        for text in valid_texts:
+            assert not toc_extractor._is_artifact(text)
+
+    def test_custom_artifact_patterns(self, toc_extractor):
+        """Test adding custom artifact patterns"""
+        toc_extractor._add_artifact_pattern(r"^Chapter \d+$")
+        
+        assert toc_extractor._is_artifact("Chapter 1")
+        assert not toc_extractor._is_artifact("Chapter 1: Content")
+
+class TestParagraphMerging:
+    """Test paragraph merging functionality"""
+    
+    def test_merge_incomplete_sentences(self, toc_extractor):
+        """Test merging incomplete sentences"""
+        text_blocks = [
+            "This is an incomplete",
+            "sentence that should merge.",
+            "This is complete.",
+            "Another incomplete",
+            "fragment to merge."
+        ]
+        html_blocks = [
+            "<p>This is an incomplete</p>",
+            "<p>sentence that should merge.</p>",
+            "<p>This is complete.</p>",
+            "<p>Another incomplete</p>",
+            "<p>fragment to merge.</p>"
+        ]
+        
+        merged_text, merged_html = toc_extractor._merge_blocks(text_blocks, html_blocks)
+        
+        assert len(merged_text) == 3
+        assert merged_text[0] == "This is an incomplete sentence that should merge."
+        assert merged_text[1] == "This is complete."
+        assert merged_text[2] == "Another incomplete fragment to merge."
+        
+        assert len(merged_html) == 3
+        assert merged_html[0] == "<p>This is an incomplete</p><p>sentence that should merge.</p>"
+
+    def test_empty_blocks(self, toc_extractor: TOCExtractor):
+        """Test handling empty block lists"""
+        merged_text, merged_html = toc_extractor._merge_blocks([], [])
+        assert len(merged_text) == 0
+        assert len(merged_html) == 0
+
+    def test_single_block(self, toc_extractor: TOCExtractor):
+        """Test handling single block"""
+        text_blocks = ["Complete sentence."]
+        html_blocks = ["<p>Complete sentence.</p>"]
+        
+        merged_text, merged_html = toc_extractor._merge_blocks(text_blocks, html_blocks)
+        assert len(merged_text) == 1
+        assert merged_text[0] == "Complete sentence."
+
+class TestTextBlockExtraction:
+    """Test text block extraction and assignment"""
+    
+    def test_extract_with_html(self, toc_extractor):
+        """Test parallel extraction of text and HTML"""
+        # Mock book content
+        toc_extractor.book.get_items_of_type = lambda x: [
+            type('MockItem', (), {
+                'get_content': lambda: b"""
+                    <div>
+                        <p>First incomplete</p>
+                        <p>sentence fragment.</p>
+                        <p>Complete sentence here.</p>
+                        <p class="header">Section Title</p>
+                        <p>More content.</p>
+                    </div>
+                """,
+                'file_name': 'content.html'
+            })
+        ]
+        
+        # Create test TOC structure
+        entry = TOCEntry(
+            title="Section Title",
+            href="content.html",
+            level=0
+        )
+        toc_extractor.toc_structure = [entry]
+        
+        # Extract blocks
+        toc_extractor.extract_text_blocks()
+        
+        # Verify results
+        assert len(entry.text_blocks) == 2
+        assert entry.text_blocks[0] == "First incomplete sentence fragment."
+        assert entry.text_blocks[1] == "Complete sentence here."
+        
+        assert len(entry.html_blocks) == 2
+        assert "<p>First incomplete</p><p>sentence fragment.</p>" in entry.html_blocks[0]
+
+    def test_artifact_filtering(self, toc_extractor):
+        """Test filtering of artifacts during extraction"""
+        toc_extractor.book.get_items_of_type = lambda x: [
+            type('MockItem', (), {
+                'get_content': lambda: b"""
+                    <div>
+                        <p>123</p>
+                        <p>Valid content.</p>
+                        <p>IV</p>
+                        <p>More valid text.</p>
+                    </div>
+                """,
+                'file_name': 'content.html'
+            })
+        ]
+        
+        entry = TOCEntry(
+            title="Test",
+            href="content.html",
+            level=0
+        )
+        toc_extractor.toc_structure = [entry]
+        
+        toc_extractor.extract_text_blocks()
+        
+        assert len(entry.text_blocks) == 2
+        assert "Valid content." in entry.text_blocks[0]
+        assert "More valid text." in entry.text_blocks[1]
+
+if __name__ == '__main__':
+    pytest.main([__file__])

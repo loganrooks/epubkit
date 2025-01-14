@@ -9,7 +9,7 @@ from typing import Dict, List, Optional, TypedDict, get_args
 
 from bs4 import BeautifulSoup
 from tkhtmlview import HTMLLabel, HTMLScrolledText
-from epubkit.parser import EPUBSelectorBackend, ImmutableTagInfo, PatternReviewBackend, CategoryType, SelectionReviewBackend, TOCEntry, TOCExtractor
+from epubkit.parser import EPUBSelectorBackend, ExtractedText, HTMLInfo, ImmutableTagInfo, PatternReviewBackend, CategoryType, SelectionReviewBackend, TOCEntry, TOCExtractor
 
 @dataclass
 class DialogText:
@@ -1002,3 +1002,1002 @@ class PatternTestDialog(tk.Toplevel):
                 for start, end, _ in ranges:
                     self.text_display.tag_add("match", start, end)
 
+
+
+@dataclass 
+class TOCExtractorText(DialogText):
+    """Text constants for TOC extractor dialog"""
+    TITLES = {
+        "main": "ToC Extractor",
+        "candidates": "Select ToC Page",
+        "structure": "Review Structure",
+        "entry": "Edit Entry",
+        "extraction": "Extraction"
+    }
+    
+    LABELS = {
+        "page": "Page {}/{}",
+        "toc_title": "Table of Contents", 
+        "hierarchy": "ToC Hierarchy",
+        "level": "Level {}",
+        "parent": "Parent Entry",
+        "position": "Position"
+    }
+    
+    BUTTONS = {
+        "prev": "Previous",
+        "next": "Next",
+        "confirm": "Confirm Page",
+        "back": "Back",
+        "continue": "Continue",
+        "add": "Add Entry",
+        "remove": "Remove",
+        "move": "Move",
+        "save": "Save Changes"
+    }
+    
+    MESSAGES = {
+        "confirm_page": "Use this page as Table of Contents?",
+        "confirm_structure": "Is this ToC structure correct?",
+        "confirm_remove": "Remove this entry and its children?",
+        "no_parent": "Entry must have a parent",
+        "invalid_position": "Invalid position"
+    }
+
+class TOCExtractorDialogUI(BaseDialog):
+    """Dialog for extracting and editing table of contents"""
+    
+    FIRST_N_BLOCKS = 200
+
+    def __init__(
+        self, 
+        parent: tk.Tk,
+        epub_path: str,
+        title: str,
+        style: DialogStyle = None,
+        ui_text: TOCExtractorText = None
+    ):
+        self.toc_backend = TOCExtractor(epub_path)
+        self.html_backend = EPUBSelectorBackend()
+        self.ui_text = ui_text or TOCExtractorText()
+        
+        # UI state
+        self.current_page = 0
+        self.candidates = []
+        self.selected_entries = set()
+        
+        super().__init__(parent, title, style=style)
+        
+        # Load candidates
+        self.load_candidates()
+        
+    def setup_ui(self):
+        """Setup tabbed interface for extraction workflow"""
+        # Configure ttk style
+        style = ttk.Style()
+        style.configure(
+            "TOC.TNotebook",
+            background=self.style.BG_COLOR,
+            foreground=self.style.FG_COLOR
+        )
+        
+        # Main notebook for workflow pages
+        self.notebook = ttk.Notebook(self, style="TOC.TNotebook")
+        self.notebook.pack(fill=tk.BOTH, expand=True)
+        
+        # Create workflow pages
+        self.candidate_page = self._create_candidate_page()
+        self.structure_page = self._create_structure_page()
+        self.review_page = self._create_review_page()
+        
+        self.notebook.add(self.candidate_page, text=self.ui_text.TITLES["candidates"])
+        self.notebook.add(self.structure_page, text=self.ui_text.TITLES["structure"])
+        self.notebook.add(self.review_page, text=self.ui_text.TITLES["extraction"])
+
+        # Configure hover tag
+        for widget in (self.text_display, self.html_preview, self.review_text):
+            widget.tag_configure(
+                "hover",
+                background=self.style.HOVER_STYLE["background"],
+                foreground=self.style.HOVER_STYLE["foreground"]
+            )
+            widget.bind("<Motion>", self.handle_hover)
+            widget.bind("<Leave>", self.handle_leave)
+            widget.bind("<Double-Button-1>", self.handle_double_click)
+        self.current_hover_tag: str = None
+        
+    def _create_candidate_page(self) -> ttk.Frame:
+        """Create page for selecting TOC page"""
+        frame = ttk.Frame(self.notebook)
+        
+        # Navigation controls
+        nav_frame = ttk.Frame(frame)
+        nav_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        self.page_label = ttk.Label(
+            nav_frame,
+            text=self.ui_text.LABELS["page"].format(1, len(self.candidates))
+        )
+        self.page_label.pack(side=tk.LEFT, padx=5)
+        
+        ttk.Button(
+            nav_frame,
+            text=self.ui_text.BUTTONS["prev"],
+            command=self.prev_page,
+            style="TOC.TButton"
+        ).pack(side=tk.LEFT)
+        
+        ttk.Button(
+            nav_frame,
+            text=self.ui_text.BUTTONS["next"], 
+            command=self.next_page,
+            style="TOC.TButton"
+        ).pack(side=tk.LEFT)
+        
+        ttk.Button(
+            nav_frame,
+            text=self.ui_text.BUTTONS["confirm"],
+            command=self.confirm_page,
+            style="TOC.TButton"  
+        ).pack(side=tk.RIGHT)
+        
+        # HTML preview
+        preview_frame = ttk.Frame(frame)
+        preview_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        self.html_preview = tk.Text(
+            preview_frame,
+            wrap=tk.WORD,
+            **self.style.TEXT_STYLE
+        )
+        self.html_preview.pack(fill=tk.BOTH, expand=True)
+        
+        return frame
+        
+    def _create_structure_page(self) -> ttk.Frame:
+        """Create page for reviewing TOC structure"""
+        frame = ttk.Frame(self.notebook)
+        
+        # Split view
+        paned = ttk.PanedWindow(frame, orient=tk.HORIZONTAL)
+        paned.pack(fill=tk.BOTH, expand=True)
+        
+        # HTML preview
+        preview_frame = ttk.Frame(paned)
+        paned.add(preview_frame)
+        
+        self.text_display = tk.Text(
+            preview_frame, 
+            wrap=tk.WORD,
+            **self.style.TEXT_STYLE
+        )
+        self.text_display.pack(fill=tk.BOTH, expand=True)
+        
+        # Hierarchy tree
+        tree_frame = ttk.Frame(paned) 
+        paned.add(tree_frame)
+        
+        self.tree = ttk.Treeview(
+            tree_frame,
+            selectmode="browse",
+            style="TOC.Treeview"
+        )
+        self.tree.pack(fill=tk.BOTH, expand=True)
+        
+        # Button controls
+        control_frame = ttk.Frame(frame)
+        control_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        ttk.Button(
+            control_frame,
+            text=self.ui_text.BUTTONS["add"],
+            command=self.add_entry,
+            style="TOC.TButton"
+        ).pack(side=tk.LEFT)
+        
+        ttk.Button(
+            control_frame,
+            text=self.ui_text.BUTTONS["remove"],
+            command=self.remove_entry,
+            style="TOC.TButton"  
+        ).pack(side=tk.LEFT)
+        
+        ttk.Button(
+            control_frame,
+            text=self.ui_text.BUTTONS["move"],
+            command=self.move_entry,
+            style="TOC.TButton"
+        ).pack(side=tk.LEFT)
+        
+        ttk.Button(
+            control_frame,
+            text=self.ui_text.BUTTONS["save"],
+            command=self.save_structure,
+            style="TOC.TButton"
+        ).pack(side=tk.RIGHT)
+        
+        return frame
+    
+    def _create_review_page(self) -> ttk.Frame:
+        """Create page for reviewing extracted text blocks"""
+        frame = ttk.Frame(self.notebook)
+        
+        # Text display with scrollbar
+        text_frame = ttk.Frame(frame)
+        text_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        scrollbar = ttk.Scrollbar(text_frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        self.review_text = tk.Text(
+            text_frame,
+            wrap=tk.WORD,
+            yscrollcommand=scrollbar.set,
+            **self.style.TEXT_STYLE
+        )
+        self.review_text.pack(fill=tk.BOTH, expand=True)
+        scrollbar.config(command=self.review_text.yview)
+        
+        # Control buttons
+        control_frame = ttk.Frame(frame)
+        control_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        ttk.Button(
+            control_frame,
+            text=self.ui_text.BUTTONS["remove"],
+            command=self.remove_artifact,
+            style="TOC.TButton"
+        ).pack(side=tk.LEFT)
+        
+        ttk.Button(
+            control_frame,
+            text=self.ui_text.BUTTONS["save"],
+            command=self.save_structure,
+            style="TOC.TButton"
+        ).pack(side=tk.RIGHT)
+        
+        return frame
+    
+    def handle_hover(self, event: tk.Event) -> None:
+        """Handle text hover with highlighting"""
+        widget = event.widget
+        index = widget.index(f"@{event.x},{event.y}")
+        
+        try:
+            bbox = widget.bbox(index)
+            if not bbox:
+                return
+
+            x1, y1, width, height = bbox
+            x2 = x1 + width
+            y2 = y1 + height
+
+            # Add padding to detection area
+            hover_padding = 5  # Adjust for larger/smaller detection area
+            mouse_x, mouse_y = event.x, event.y 
+
+            # Check if mouse is within padded area
+            if (x1 - hover_padding <= mouse_x <= x2 + hover_padding and
+                y1 - hover_padding <= mouse_y <= y2 + hover_padding):
+                # Get tags at current position
+                tags = widget.tag_names(index)
+                block_tags = [t for t in tags if t.startswith('block_')]
+                
+                if block_tags:
+                    for tag in block_tags:
+                        ranges = widget.tag_ranges(tag)
+                        if ranges:
+                            block_start, block_end = ranges[0], ranges[1]
+                            text = widget.get(block_start, block_end).strip()
+                            
+                            if text and text != self.current_hover_tag:
+                                self._reset_hover(widget)
+                                widget.tag_add("hover", block_start, block_end)
+                                widget.configure(cursor="hand2")
+                                self.current_hover_tag = text
+                                return
+                
+                self._reset_hover(widget)
+                
+        except tk.TclError:
+            self._reset_hover(widget)
+
+    def _reset_hover(self, widget: tk.Text) -> None:
+        """Reset hover state for widget"""
+        if self.current_hover_tag:
+            widget.tag_remove("hover", "1.0", tk.END)
+            widget.configure(cursor="arrow")
+            self.current_hover_tag = None
+
+    def handle_leave(self, event: tk.Event) -> None:
+        """Reset hover when mouse leaves widget"""
+        self._reset_hover(event.widget)
+
+    def handle_double_click(self, event: tk.Event) -> None:
+        """Handle text selection for entry addition"""
+        widget = event.widget
+        try:
+            selection = widget.tag_ranges("sel")
+            if selection:
+                text = widget.get(*selection)
+                self.add_entry_from_text(text)
+        except tk.TclError:
+            pass
+        
+    def load_candidates(self):
+        """Load TOC candidates from backend"""
+        self.candidates = self.toc_backend.find_toc_candidates()
+        if self.candidates:
+
+            self.show_candidate(0)
+            
+    def show_candidate(self, index: int):
+        """Display candidate page"""
+        if 0 <= index < len(self.candidates):
+            self.current_page = index
+            filename, content = self.candidates[index]
+            
+            # Update navigation
+            self.page_label.config(
+                text=self.ui_text.LABELS["page"].format(
+                    index + 1, 
+                    len(self.candidates)
+                )
+            )
+            parsed_text = BeautifulSoup(content, "html.parser").get_text('\n')
+            # Update preview
+            self.html_preview.delete("1.0", tk.END)
+            self.html_preview.insert("1.0", parsed_text)
+            
+    def prev_page(self):
+        """Show previous candidate"""
+        if self.current_page > 0:
+            self.show_candidate(self.current_page - 1)
+
+            
+    def next_page(self):
+        """Show next candidate"""
+        if self.current_page < len(self.candidates) - 1:
+            self.show_candidate(self.current_page + 1)
+            
+    def confirm_page(self):
+        """Confirm TOC page selection"""
+        if messagebox.askyesno(
+            self.ui_text.TITLES["candidates"],
+            self.ui_text.MESSAGES["confirm_page"]
+        ):
+            # Set page in backend
+            filename, content = self.candidates[self.current_page]
+            self.toc_backend.set_toc_page(content)
+            
+            # Extract structure
+            self.toc_backend.extract_toc_structure()
+            # Update tree view
+            self._populate_tree()
+
+            self.html_backend.load_html(content)
+
+            self._populate_text_display(self.html_backend.html_map)
+            
+            # Switch to structure page
+            self.notebook.select(1)
+
+    def _populate_review_text(self) -> None:
+        """Display first N text blocks for review with headers"""
+        self.review_text.delete("1.0", tk.END)
+        
+        def process_entry(entry: TOCEntry, level: int = 0, block_count: int = 0) -> int:
+            """Recursively process entries and their blocks
+            Returns: Updated block count
+            """
+            # Insert header with indentation
+            header_start = self.review_text.index("end-1c")
+            self.review_text.insert("end", f"{'  ' * level}{entry.title}\n\n")
+            header_end = self.review_text.index("end-1c")
+            
+            # Tag header
+            header_tag = f"block_{block_count}"
+            self.review_text.tag_add(header_tag, header_start, header_end)
+            self.review_text.tag_lower(header_tag, "hover")
+            block_count += 1
+            
+            # Process text blocks
+            for block in entry.text_blocks:
+                if block_count >= self.FIRST_N_BLOCKS:
+                    return block_count
+                    
+                block_start = self.review_text.index("end-1c")
+                self.review_text.insert("end", f"{'  ' * (level + 1)}{block}\n\n")
+                block_end = self.review_text.index("end-1c")
+                
+                block_tag = f"block_{block_count}"
+                self.review_text.tag_add(block_tag, block_start, block_end)
+                self.review_text.tag_lower(block_tag, "hover")
+                block_count += 1
+            
+            # Process children recursively
+            for child in entry.children:
+                block_count = process_entry(child, level + 1, block_count)
+                if block_count >= self.FIRST_N_BLOCKS:
+                    break
+                    
+            return block_count
+
+        # Start recursive processing from root entries    
+        block_count = 0
+        for entry in self.toc_backend.toc_structure:
+            block_count = process_entry(entry, block_count=block_count)
+            if block_count >= self.FIRST_N_BLOCKS:
+                break
+
+
+    def _populate_text_display(self, html_map: Dict[str, dict]):
+        """
+        Populate the text display with each entry in html_map, tagging each
+        block so the hover and click handlers can process them.
+        """
+        self.text_display.delete("1.0", tk.END)
+        for i, (text_key, data) in enumerate(islice(html_map.items(), self.FIRST_N_BLOCKS)):
+            block_start = self.text_display.index('end-1c')
+            self.text_display.insert(tk.END, text_key)
+            block_end = self.text_display.index('end-1c')
+            block_tag = f"block_{i}"
+            self.text_display.tag_add(block_tag, block_start, block_end)
+            
+            # Configure block tag to be below hover
+            self.text_display.tag_lower(block_tag, "hover")
+            self.text_display.insert(tk.END, "\n\n")
+
+            
+    def _populate_tree(self):
+        """Populate tree with TOC structure"""
+        self.tree.delete(*self.tree.get_children())
+        
+        def add_entries(entries: List[TOCEntry], parent=""):
+            for i, entry in enumerate(entries):
+                item_id = self.tree.insert(
+                    parent,
+                    "end",
+                    text=entry.title,
+                    values=(entry.href, entry.level)
+                )
+                if entry.children:
+                    add_entries(entry.children, item_id)
+                    
+        add_entries(self.toc_backend.toc_structure)
+
+    def _create_review_page(self) -> ttk.Frame:
+        frame = ttk.Frame(self.notebook)
+        
+        # Use HTMLScrolledText for review
+        self.review_view = HTMLScrolledText(
+            frame,
+            padx=20,
+            pady=10,
+            **self.style.TEXT_STYLE
+        )
+        self.review_view.pack(fill=tk.BOTH, expand=True)
+        
+        
+        # Control buttons
+        control_frame = ttk.Frame(frame)
+        control_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        ttk.Button(
+            control_frame,
+            text=self.ui_text.BUTTONS["remove"],
+            command=self.remove_artifact,
+            style="TOC.TButton"
+        ).pack(side=tk.LEFT)
+        
+        ttk.Button(
+            control_frame,
+            text=self.ui_text.BUTTONS["confirm"],
+            command=self.confirm_extraction,
+            style="TOC.TButton"
+        ).pack(side=tk.RIGHT)
+        
+        return frame
+        
+    def add_entry(self):
+        """Add new TOC entry"""
+        # Get selected text from HTML view
+        selection = self.text_display.tag_ranges("sel")
+        if not selection:
+            return
+            
+        text = self.text_display.get(*selection)
+        
+        # Create entry dialog
+        dialog = TOCEntryDialog(
+            self,
+            self.ui_text.TITLES["entry"],
+            text,
+            self.tree,
+            style=self.style,
+            ui_text=self.ui_text
+        )
+        
+        if dialog.result:
+            # Update backend structure
+            entry = TOCEntry(**dialog.result)
+            self._update_structure(entry)
+            
+            # Refresh tree
+            self._populate_tree()
+
+            
+    def remove_entry(self):
+        """Remove selected entry"""
+        selection = self.tree.selection()
+        if not selection:
+            return
+            
+        if messagebox.askyesno(
+            self.ui_text.TITLES["structure"],
+            self.ui_text.MESSAGES["confirm_remove"]
+        ):
+            # Remove from backend
+            self._remove_entry(selection[0])
+            
+            # Update tree
+            self.tree.delete(selection[0])
+            
+    def move_entry(self):
+        """Move selected entry"""
+        selection = self.tree.selection()
+        if not selection:
+            return
+            
+        # Create move dialog
+        dialog = TOCMoveDialog(
+            self,
+            self.ui_text.TITLES["entry"],
+            selection[0],
+            self.tree,
+            style=self.style,
+            ui_text=self.ui_text
+        )
+        
+        if dialog.result:
+            # Update backend structure
+            self._move_entry(selection[0], **dialog.result)
+            
+            # Refresh tree
+            self._populate_tree()
+
+    def add_entry_from_text(self, text: str) -> None:
+        """Create new TOC entry from selected text"""
+        dialog = TOCEntryDialog(
+            self,
+            self.ui_text.TITLES["entry"],
+            text,
+            self.tree,
+            style=self.style,
+            ui_text=self.ui_text
+        )
+        
+        if dialog.result:
+            entry = TOCEntry(**dialog.result)
+            self._update_structure(entry)
+            self._populate_tree()
+
+    def remove_artifact(self) -> None:
+        """Remove selected text as artifact pattern"""
+        selection = self.review_text.tag_ranges("sel")
+        if selection:
+            text = self.review_text.get(*selection).strip()
+            pattern = f"^{re.escape(text)}$"
+            self.toc_backend._add_artifact_pattern(pattern)
+            
+            # Refresh review text
+            self._populate_review_text()
+            
+    def save_structure(self):
+        """Extract text and switch to review page"""
+        if messagebox.askyesno(
+            self.ui_text.TITLES["structure"],
+            self.ui_text.MESSAGES["confirm_structure"]
+        ):
+            # Create progress dialog
+            progress = ttk.Progressbar(
+                self, 
+                mode='indeterminate',
+                length=300
+            )
+            progress.pack(pady=10)
+            progress.start()
+            
+            try:
+                # Extract text blocks with TOC structure
+                self.update_idletasks()
+                self.toc_backend.extract_text_blocks()
+                
+                # Populate review page
+                self._populate_review_text()
+                
+                # Switch to review page
+                self.notebook.select(2)  # Index of review page
+                
+            except Exception as e:
+                messagebox.showerror(
+                    "Error",
+                    f"Failed to extract text: {str(e)}"
+                )
+                
+            finally:
+                self.result = None
+                progress.stop()
+                progress.destroy()
+
+    def on_close(self):
+        """Handle window close with confirmation"""
+        if messagebox.askyesno(
+            VaporwaveFormatter.format_title("Confirm Exit"),
+            "Are you sure you want to exit? All progress will be lost."
+        ):
+            self.result = False
+            self.cleanup()
+            self.destroy()
+
+    def confirm_extraction(self):
+        """Final confirmation and close"""
+        self.result = self.toc_backend.toc_structure
+        self.cleanup()
+        self.destroy()        
+    
+    def _update_structure(self, entry: TOCEntry):
+        """Update backend TOC structure with new entry"""
+        if entry.level == 0:
+            self.toc_backend.toc_structure.append(entry)
+        else:
+            # Find parent
+            def find_parent(entries: List[TOCEntry], level: int) -> Optional[TOCEntry]:
+                for e in entries:
+                    if e.level == level - 1:
+                        return e
+                    if e.children:
+                        parent = find_parent(e.children, level)
+                        if parent:
+                            return parent
+                return None
+                
+            parent = find_parent(self.toc_backend.toc_structure, entry.level)
+            if parent:
+                parent.children.append(entry)
+            else:
+                raise ValueError(self.ui_text.MESSAGES["no_parent"])
+                
+    def _remove_entry(self, item_id: str):
+        """Remove entry from backend structure"""
+        # Get entry info
+        entry_text = self.tree.item(item_id)["text"]
+        
+        def remove_entry(entries: List[TOCEntry]):
+            for i, entry in enumerate(entries):
+                if entry.title == entry_text:
+                    entries.pop(i)
+                    return True
+                if entry.children and remove_entry(entry.children):
+                    return True
+            return False
+            
+        remove_entry(self.toc_backend.toc_structure)
+        
+    def _move_entry(self, item_id: str, parent_id: str, position: int):
+        """Move entry in backend structure"""
+        # Get entry info
+        entry_text = self.tree.item(item_id)["text"]
+        
+        # Find and remove entry
+        def find_entry(entries: List[TOCEntry]) -> Optional[TOCEntry]:
+            for i, entry in enumerate(entries):
+                if entry.title == entry_text:
+                    return entries.pop(i)
+                if entry.children:
+                    found = find_entry(entry.children)
+                    if found:
+                        return found
+            return None
+            
+        entry = find_entry(self.toc_backend.toc_structure)
+        if not entry:
+            return
+            
+        # Add to new parent
+        if parent_id:
+            parent_text = self.tree.item(parent_id)["text"]
+            
+            def find_parent(entries: List[TOCEntry]) -> Optional[TOCEntry]:
+                for entry in entries:
+                    if entry.title == parent_text:
+                        return entry
+                    if entry.children:
+                        parent = find_parent(entry.children)
+                        if parent:
+                            return parent
+                return None
+                
+            parent = find_parent(self.toc_backend.toc_structure)
+            if parent:  
+                entry.level = parent.level + 1
+                if 0 <= position <= len(parent.children):
+                    parent.children.insert(position, entry)
+                else:
+                    raise ValueError(self.ui_text.MESSAGES["invalid_position"])
+                    
+        else:  # Move to root
+            entry.level = 0
+            if 0 <= position <= len(self.toc_backend.toc_structure):
+                self.toc_backend.toc_structure.insert(position, entry)
+            else:
+                raise ValueError(self.ui_text.MESSAGES["invalid_position"])
+        
+    
+
+
+class TOCEntryDialog(BaseDialog):
+    """Dialog for creating/editing TOC entries"""
+    
+    def __init__(
+        self, 
+        parent: tk.Tk,
+        title: str,
+        text: str,
+        tree: ttk.Treeview,
+        style: DialogStyle = None,
+        ui_text: TOCExtractorText = None
+    ):
+        self.text = text
+        self.tree = tree
+        self.ui_text = ui_text or TOCExtractorText()
+        super().__init__(parent, title, style=style)
+        
+    def setup_ui(self):
+        # Entry details frame
+        details = ttk.LabelFrame(self, text=self.ui_text.LABELS["entry"])
+        details.pack(fill=tk.X, padx=10, pady=5)
+        
+        # Title (from selected text)
+        ttk.Label(details, text="Title:").grid(row=0, column=0, padx=5, pady=5)
+        title_var = tk.StringVar(value=self.text)
+        ttk.Entry(details, textvariable=title_var).grid(row=0, column=1, sticky='ew')
+        
+        # Parent selection
+        ttk.Label(details, text=self.ui_text.LABELS["parent"]).grid(row=1, column=0, padx=5, pady=5)
+        parent_var = tk.StringVar()
+        parent_cb = ttk.Combobox(details, textvariable=parent_var)
+        parent_cb.grid(row=1, column=1, sticky='ew')
+        
+        # Populate parent options
+        parents = ["(Root Level)"]  # Root level option
+        for item_id in self.tree.get_children():
+            parents.append(self.tree.item(item_id)["text"])
+        parent_cb["values"] = parents
+        parent_cb.set(parents[0])
+        
+        # Position spinbox 
+        ttk.Label(details, text=self.ui_text.LABELS["position"]).grid(row=2, column=0, padx=5, pady=5)
+        position_var = tk.StringVar(value="0")
+        position_sb = ttk.Spinbox(
+            details,
+            from_=0,
+            to=100,  # Arbitrary max
+            textvariable=position_var,
+            width=5
+        )
+        position_sb.grid(row=2, column=1, sticky='w')
+        
+        # Update position max when parent changes
+        def update_position_max(*args):
+            parent_text = parent_var.get()
+            if parent_text == "(Root Level)":
+                position_sb["to"] = len(self.tree.get_children())
+            else:
+                for item_id in self.tree.get_children():
+                    if self.tree.item(item_id)["text"] == parent_text:
+                        position_sb["to"] = len(self.tree.get_children(item_id))
+                        break
+                        
+        parent_var.trace_add("write", update_position_max)
+        
+        # Control buttons
+        button_frame = ttk.Frame(self)
+        button_frame.pack(fill=tk.X, padx=10, pady=10)
+        
+        ttk.Button(
+            button_frame,
+            text=self.ui_text.BUTTONS["confirm"],
+            command=lambda: self.confirm(title_var.get(), parent_var.get(), int(position_var.get()))
+        ).pack(side=tk.RIGHT, padx=5)
+        
+        ttk.Button(
+            button_frame,
+            text=self.ui_text.BUTTONS["cancel"],
+            command=self.destroy
+        ).pack(side=tk.RIGHT, padx=5)
+        
+    def confirm(self, title: str, parent: str, position: int):
+        """Validate and store result"""
+        # Determine level based on parent
+        if parent == "(Root Level)":
+            level = 0
+            parent_id = ""
+        else:
+            # Find parent item
+            for item_id in self.tree.get_children():
+                if self.tree.item(item_id)["text"] == parent:
+                    level = int(self.tree.item(item_id)["values"][1]) + 1
+                    parent_id = item_id
+                    break
+                    
+        self.result = {
+            "title": title,
+            "href": "#",  # Placeholder href
+            "level": level,
+            "parent_id": parent_id,
+            "position": position
+        }
+        self.destroy()
+
+
+class TOCMoveDialog(BaseDialog):
+    """Dialog for moving TOC entries"""
+    
+    def __init__(
+        self,
+        parent: tk.Tk,
+        title: str, 
+        item_id: str,
+        tree: ttk.Treeview,
+        style: DialogStyle = None,
+        ui_text: TOCExtractorText = None
+    ):
+        self.item_id = item_id
+        self.tree = tree
+        self.ui_text = ui_text or TOCExtractorText()
+        super().__init__(parent, title, style=style)
+        
+    def setup_ui(self):
+        # Move options frame
+        options = ttk.LabelFrame(self, text=self.ui_text.LABELS["move"])
+        options.pack(fill=tk.X, padx=10, pady=5)
+        
+        # Current item info
+        current_text = self.tree.item(self.item_id)["text"]
+        ttk.Label(
+            options,
+            text=f"Moving: {current_text}"
+        ).grid(row=0, column=0, columnspan=2, padx=5, pady=5)
+        
+        # New parent selection
+        ttk.Label(
+            options,
+            text=self.ui_text.LABELS["parent"]
+        ).grid(row=1, column=0, padx=5, pady=5)
+        
+        parent_var = tk.StringVar()
+        parent_cb = ttk.Combobox(options, textvariable=parent_var)
+        parent_cb.grid(row=1, column=1, sticky='ew')
+        
+        # Populate parent options, excluding self and children
+        def get_valid_parents(item_id):
+            parents = ["(Root Level)"]
+            children = set()
+            
+            def collect_children(node):
+                for child in self.tree.get_children(node):
+                    children.add(child)
+                    collect_children(child)
+                    
+            collect_children(item_id)
+            
+            for node in self.tree.get_children():
+                if node != item_id and node not in children:
+                    parents.append(self.tree.item(node)["text"])
+                    
+            return parents
+            
+        parent_cb["values"] = get_valid_parents(self.item_id)
+        parent_cb.set("(Root Level)")
+        
+        # Position spinbox
+        ttk.Label(
+            options,
+            text=self.ui_text.LABELS["position"]
+        ).grid(row=2, column=0, padx=5, pady=5)
+        
+        position_var = tk.StringVar(value="0")
+        position_sb = ttk.Spinbox(
+            options,
+            from_=0,
+            to=100,
+            textvariable=position_var,
+            width=5
+        )
+        position_sb.grid(row=2, column=1, sticky='w')
+        
+        # Update position max when parent changes
+        def update_position_max(*args):
+            parent_text = parent_var.get()
+            if parent_text == "(Root Level)":
+                position_sb["to"] = len(self.tree.get_children())
+            else:
+                for item_id in self.tree.get_children():
+                    if self.tree.item(item_id)["text"] == parent_text:
+                        position_sb["to"] = len(self.tree.get_children(item_id))
+                        break
+                        
+        parent_var.trace_add("write", update_position_max)
+        
+        # Control buttons
+        button_frame = ttk.Frame(self)
+        button_frame.pack(fill=tk.X, padx=10, pady=10)
+        
+        ttk.Button(
+            button_frame,
+            text=self.ui_text.BUTTONS["confirm"],
+            command=lambda: self.confirm(
+                parent_var.get(),
+                int(position_var.get())
+            )
+        ).pack(side=tk.RIGHT, padx=5)
+        
+        ttk.Button(
+            button_frame,
+            text=self.ui_text.BUTTONS["cancel"],
+            command=self.destroy
+        ).pack(side=tk.RIGHT, padx=5)
+        
+    def confirm(self, parent: str, position: int):
+        """Store move parameters"""
+        # Find parent_id if not root
+        parent_id = ""
+        if parent != "(Root Level)":
+            for item_id in self.tree.get_children():
+                if self.tree.item(item_id)["text"] == parent:
+                    parent_id = item_id
+                    break
+                    
+        self.result = {
+            "parent_id": parent_id,
+            "position": position
+        }
+        self.destroy()
+
+    
+
+if __name__ == "__main__":
+    app = tk.Tk()
+    app.title("Dialog Test")
+    
+    import tkinter as tk
+
+    from epubkit.dialogueUI import TOCExtractorDialogUI, TOCExtractorText, VaporwaveFormatter
+    from epubkit.viewer import ViewerText, ViewerTheme
+
+    root = tk.Tk()
+    root.title("Table of Contents")
+    root.geometry("1920x1080+1080+840")
+    root.withdraw()
+
+    epub_dir = Path("./epubkit/resources/epubs").resolve()
+    epub_files = list(epub_dir.glob("*.epub"))
+    index = 1
+    print(f'Found {len(epub_files)} epub files')
+    print(f'Now processing {epub_files[index]}')
+
+    ui_text = VaporwaveFormatter.format_dialog_text(TOCExtractorText)
+
+    dialogue = TOCExtractorDialogUI(
+                    parent=root,
+                    epub_path=epub_files[index],
+                    title=ViewerText.TITLES["toc"],
+                    style=ViewerTheme,
+                    ui_text=ui_text
+                )
+    root.wait_window(dialogue)
+
+    toc = dialogue.result
+
+    root.mainloop()

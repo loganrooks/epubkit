@@ -6,7 +6,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 from sklearn.manifold import TSNE, MDS
 from sklearn.decomposition import PCA, TruncatedSVD
-from umap import UMAP  
+import umap as UMAP
 from typing import Dict, List, Optional, Tuple, Any, Protocol, Literal
 import numpy.typing as npt
 from pathlib import Path

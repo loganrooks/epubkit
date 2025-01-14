@@ -1765,6 +1765,100 @@ class MockSearch:
             results = [r for r in results if r.category == category_filter]
         return results
 
+class OptionsDialog(tk.Toplevel):
+    def __init__(self, parent, embedders, current_embedder, current_index):
+        super().__init__(parent)
+        self.title("オプション OPTIONS 設定")
+        self.geometry("500x600")
+        
+        # Configure font for Japanese text
+        self.japanese_font = ("Noto Sans JP", 12)
+        
+        # Store state
+        self.embedders = embedders
+        self.current_embedder = current_embedder
+        self.current_index = current_index
+        self.animations_enabled = parent.desktop.animations_enabled if hasattr(parent, 'desktop') else True
+        self.result = None
+        
+        # Apply theme
+        self.configure(bg=ViewerTheme.BG_COLOR)
+        self.setup_ui()
+        
+    def setup_ui(self):
+        # Embedding section
+        embed_frame = ttk.LabelFrame(
+            self, 
+            text="埋め込み Embeddings", 
+            padding=10
+        )
+        embed_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        self.embedder_var = tk.StringVar(value=self.current_embedder)
+        for name in self.embedders.keys():
+            ttk.Radiobutton(
+                embed_frame,
+                text=name,
+                value=name,
+                variable=self.embedder_var
+            ).pack(anchor=tk.W, pady=2)
+            
+        # Index section
+        index_frame = ttk.LabelFrame(
+            self,
+            text="インデックス Indexing",
+            padding=10
+        )
+        index_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        self.index_var = tk.StringVar(value=self.current_index)
+        for index_type in ["flat", "faiss", "cluster", "cross-encoder"]:
+            ttk.Radiobutton(
+                index_frame,
+                text=index_type,
+                value=index_type,
+                variable=self.index_var
+            ).pack(anchor=tk.W, pady=2)
+
+         # Animations section
+        anim_frame = ttk.LabelFrame(
+            self,
+            text="アニメーション Animations",
+            padding=10
+        )
+        anim_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        self.anim_var = tk.BooleanVar(value=self.animations_enabled)
+        ttk.Checkbutton(
+            anim_frame,
+            text="Enable GIF Animations アニメを有効にする",
+            variable=self.anim_var
+        ).pack(anchor=tk.W, pady=2)
+            
+        # Buttons
+        btn_frame = ttk.Frame(self)
+        btn_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=10, pady=10)
+        
+        ttk.Button(
+            btn_frame,
+            text="保存 Save",
+            command=self.save_options
+        ).pack(side=tk.RIGHT, padx=5)
+        
+        ttk.Button(
+            btn_frame,
+            text="キャンセル Cancel",
+            command=self.destroy
+        ).pack(side=tk.RIGHT, padx=5)
+        
+    def save_options(self):
+        self.result = {
+            'embedder': self.embedder_var.get(),
+            'index': self.index_var.get(),
+            'animations': self.anim_var.get()
+        }
+        self.destroy()
+
 def run_mock_viewer():
     """Run the viewer with mock data for testing"""
     root = tk.Tk()

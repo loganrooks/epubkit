@@ -1302,6 +1302,318 @@ class RetroMusicPlayer(tk.Toplevel):
         self.after(100, self.update_time)
 
 
+class DocumentViewer(ttk.Frame):
+    def __init__(self, parent, **kwargs):
+        super().__init__(parent, **kwargs)
+        self.setup_ui()
+        
+    def setup_ui(self):
+        # Configure styles
+        style = ttk.Style()
+        style.configure(
+            "Document.TFrame",
+            background=ViewerTheme.BG_COLOR
+        )
+        
+        # Main content frame
+        content_frame = ttk.Frame(self, style="Document.TFrame")
+        content_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Text widget with scrollbar
+        self.text = tk.Text(
+            content_frame,
+            wrap=tk.WORD,
+            padx=40,
+            pady=20,
+            spacing1=10,  # Space before paragraph
+            spacing2=2,   # Space between paragraph
+            spacing3=10,  # Space after paragraph
+            font=ViewerTheme.MAIN_FONT,
+            fg=ViewerTheme.FG_COLOR,
+            bg=ViewerTheme.BG_COLOR,
+            insertbackground=ViewerTheme.FG_COLOR,
+            selectbackground=ViewerTheme.ACCENT_COLOR,
+            selectforeground=ViewerTheme.BG_COLOR,
+            relief=tk.SUNKEN,
+            borderwidth=2
+        )
+        
+        scrollbar = ttk.Scrollbar(
+            content_frame,
+            orient=tk.VERTICAL,
+            command=self.text.yview
+        )
+        self.text.configure(yscrollcommand=scrollbar.set)
+        
+        # Pack components
+        self.text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+    def load_document(self, extracted: ExtractedText):
+        """Load parsed EPUB content"""
+        self.text.delete(1.0, tk.END)
+        
+        # Configure content tags
+        self.text.tag_configure(
+            "header",
+            font=ViewerTheme.HEADER_FONT,
+            spacing3=20,
+            foreground=ViewerTheme.ACCENT_COLOR
+        )
+        self.text.tag_configure(
+            "subheader",
+            font=ViewerTheme.SUBHEADER_FONT,
+            spacing3=15,
+            foreground=ViewerTheme.SECONDARY_COLOR
+        )
+        self.text.tag_configure(
+            "body",
+            font=ViewerTheme.MAIN_FONT,
+            spacing2=10
+        )
+        self.text.tag_configure(
+            "footnote",
+            font=ViewerTheme.MONO_FONT,
+            foreground=ViewerTheme.SECONDARY_COLOR,
+            spacing1=5
+        )
+            
+        # Insert content hierarchically
+        for header in extracted.headers:
+            self.text.insert(tk.END, f"\n{header.text}\n", "header")
+            
+            # Add subheaders under this header
+            for subheader in extracted.subheaders:
+                if subheader.header_path[0] == header.text:
+                    self.text.insert(tk.END, f"\n{subheader.text}\n", "subheader")
+            
+            # Add body text under this header
+            for block in extracted.body:
+                if block.header_path and block.header_path[0] == header.text:
+                    self.text.insert(tk.END, f"\n{block.text}\n", "body")
+                    
+                    # Add footnotes if present
+                    if block.footnotes:
+                        for i, note in enumerate(block.footnotes, 1):
+                            self.text.insert(tk.END, f"\n[{i}] {note}\n", "footnote")
+
+        # Scroll to top
+        self.text.see("1.0")
+
+    def load_document_from_toc(self, toc_entries: List[TOCEntry]) -> None:
+            """Load document from TOC structure with text blocks"""
+            self.text.delete(1.0, tk.END)
+            
+            # Configure content tags
+            self.text.tag_configure(
+                "toc_entry",
+                font=ViewerTheme.HEADER_FONT,
+                spacing3=20,
+                foreground=ViewerTheme.ACCENT_COLOR
+            )
+            self.text.tag_configure(
+                "toc_sub_entry", 
+                font=ViewerTheme.SUBHEADER_FONT,
+                spacing3=15,
+                foreground=ViewerTheme.SECONDARY_COLOR
+            )
+            self.text.tag_configure(
+                "block",
+                font=ViewerTheme.MAIN_FONT,
+                spacing2=10
+            )
+            
+            def process_entry(entry: TOCEntry, level: int = 0, block_index: int = 0) -> int:
+                """Recursively process entries and track positions"""
+                # Insert entry title
+                tag = "toc_entry" if level == 0 else "toc_sub_entry"
+                self.text.insert(tk.END, f"\n{'  ' * level}{entry.title}\n", tag)
+                
+                # Track entry's content range
+                entry.start_pos = self.text.index("end-1c")
+                
+                # Insert text blocks
+                for text in entry.text_blocks:
+                    block_start = self.text.index("end-1c")
+                    self.text.insert(tk.END, f"\n{text}\n", "block")
+                    block_end = self.text.index("end-1c") 
+                    
+                    # Add block tag for lookup
+                    block_tag = f"block_{block_index}"
+                    self.text.tag_add(block_tag, block_start, block_end)
+                    block_index += 1
+                
+                # Process children
+                for child in entry.children:
+                    block_index = process_entry(child, level + 1, block_index)
+                    
+                # Record end position after all content
+                entry.end_pos = self.text.index("end-1c")
+                return block_index
+
+            # Process entries and track positions
+            for entry in toc_entries:
+                process_entry(entry)
+                    
+            # Scroll to top
+            self.text.see("1.0")
+
+class DocumentViewer(ttk.Frame):
+    def __init__(self, parent, **kwargs):
+        super().__init__(parent, **kwargs)
+        self.setup_ui()
+        
+    def setup_ui(self):
+        # Configure styles
+        style = ttk.Style()
+        style.configure(
+            "Document.TFrame",
+            background=ViewerTheme.BG_COLOR
+        )
+        
+        # Main content frame
+        content_frame = ttk.Frame(self, style="Document.TFrame")
+        content_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Text widget with scrollbar
+        self.text = tk.Text(
+            content_frame,
+            wrap=tk.WORD,
+            padx=40,
+            pady=20,
+            spacing1=10,  # Space before paragraph
+            spacing2=2,   # Space between paragraph
+            spacing3=10,  # Space after paragraph
+            font=ViewerTheme.MAIN_FONT,
+            fg=ViewerTheme.FG_COLOR,
+            bg=ViewerTheme.BG_COLOR,
+            insertbackground=ViewerTheme.FG_COLOR,
+            selectbackground=ViewerTheme.ACCENT_COLOR,
+            selectforeground=ViewerTheme.BG_COLOR,
+            relief=tk.SUNKEN,
+            borderwidth=2
+        )
+        
+        scrollbar = ttk.Scrollbar(
+            content_frame,
+            orient=tk.VERTICAL,
+            command=self.text.yview
+        )
+        self.text.configure(yscrollcommand=scrollbar.set)
+        
+        # Pack components
+        self.text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+    def load_document(self, extracted: ExtractedText):
+        """Load parsed EPUB content"""
+        self.text.delete(1.0, tk.END)
+        
+        # Configure content tags
+        self.text.tag_configure(
+            "header",
+            font=ViewerTheme.HEADER_FONT,
+            spacing3=20,
+            foreground=ViewerTheme.ACCENT_COLOR
+        )
+        self.text.tag_configure(
+            "subheader",
+            font=ViewerTheme.SUBHEADER_FONT,
+            spacing3=15,
+            foreground=ViewerTheme.SECONDARY_COLOR
+        )
+        self.text.tag_configure(
+            "body",
+            font=ViewerTheme.MAIN_FONT,
+            spacing2=10
+        )
+        self.text.tag_configure(
+            "footnote",
+            font=ViewerTheme.MONO_FONT,
+            foreground=ViewerTheme.SECONDARY_COLOR,
+            spacing1=5
+        )
+            
+        # Insert content hierarchically
+        for header in extracted.headers:
+            self.text.insert(tk.END, f"\n{header.text}\n", "header")
+            
+            # Add subheaders under this header
+            for subheader in extracted.subheaders:
+                if subheader.header_path[0] == header.text:
+                    self.text.insert(tk.END, f"\n{subheader.text}\n", "subheader")
+            
+            # Add body text under this header
+            for block in extracted.body:
+                if block.header_path and block.header_path[0] == header.text:
+                    self.text.insert(tk.END, f"\n{block.text}\n", "body")
+                    
+                    # Add footnotes if present
+                    if block.footnotes:
+                        for i, note in enumerate(block.footnotes, 1):
+                            self.text.insert(tk.END, f"\n[{i}] {note}\n", "footnote")
+
+        # Scroll to top
+        self.text.see("1.0")
+
+    def load_document_from_toc(self, toc_entries: List[TOCEntry]) -> None:
+            """Load document from TOC structure with text blocks"""
+            self.text.delete(1.0, tk.END)
+            
+            # Configure content tags
+            self.text.tag_configure(
+                "toc_entry",
+                font=ViewerTheme.HEADER_FONT,
+                spacing3=20,
+                foreground=ViewerTheme.ACCENT_COLOR
+            )
+            self.text.tag_configure(
+                "toc_sub_entry", 
+                font=ViewerTheme.SUBHEADER_FONT,
+                spacing3=15,
+                foreground=ViewerTheme.SECONDARY_COLOR
+            )
+            self.text.tag_configure(
+                "block",
+                font=ViewerTheme.MAIN_FONT,
+                spacing2=10
+            )
+            
+            def process_entry(entry: TOCEntry, level: int = 0, block_index: int = 0) -> int:
+                """Recursively process entries and track positions"""
+                # Insert entry title
+                tag = "toc_entry" if level == 0 else "toc_sub_entry"
+                self.text.insert(tk.END, f"\n{'  ' * level}{entry.title}\n", tag)
+                
+                # Track entry's content range
+                entry.start_pos = self.text.index("end-1c")
+                
+                # Insert text blocks
+                for text in entry.text_blocks:
+                    block_start = self.text.index("end-1c")
+                    self.text.insert(tk.END, f"\n{text}\n", "block")
+                    block_end = self.text.index("end-1c") 
+                    
+                    # Add block tag for lookup
+                    block_tag = f"block_{block_index}"
+                    self.text.tag_add(block_tag, block_start, block_end)
+                    block_index += 1
+                
+                # Process children
+                for child in entry.children:
+                    block_index = process_entry(child, level + 1, block_index)
+                    
+                # Record end position after all content
+                entry.end_pos = self.text.index("end-1c")
+                return block_index
+
+            # Process entries and track positions
+            for entry in toc_entries:
+                process_entry(entry)
+                    
+            # Scroll to top
+            self.text.see("1.0")
+
 class TextSearchViewer(tk.Toplevel):
     """Main viewer window"""
     def __init__(self, desktop: VaporwaveDesktop, search: SemanticSearch):

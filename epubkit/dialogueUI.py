@@ -852,3 +852,153 @@ class SelectionReviewDialogUI(BaseDialog):
         self.cleanup()
         self.destroy()
 
+
+
+class PatternTestDialog(tk.Toplevel):
+    """Dialog for testing category pattern matches"""
+    def __init__(self, parent, extracted_text: ExtractedText, html_map: Dict[str, HTMLInfo]):
+        super().__init__(parent)
+        self.title("パターン テスト ＰＡＴＴＥＲＮ ＴＥＳＴ")
+        self.geometry("1000x800")
+        
+        # Store data
+        self.extracted = extracted_text
+        self.html_map = html_map
+        
+        # Track overlaps
+        self.overlaps = self._find_overlaps()
+        
+        # Configure styles
+        self.configure(bg=ViewerTheme.BG_COLOR)
+        self.setup_ui()
+        
+    def setup_ui(self):
+        # Split pane layout
+        paned = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
+        paned.pack(fill=tk.BOTH, expand=True)
+        
+        # Left side - Text display
+        left_frame = ttk.Frame(paned)
+        paned.add(left_frame, weight=3)
+        
+        self.text_display = tk.Text(
+            left_frame,
+            wrap=tk.WORD,
+            **ViewerTheme.TEXT_STYLE
+        )
+        self.text_display.pack(fill=tk.BOTH, expand=True)
+        
+        # Configure highlight tags
+        self.text_display.tag_configure(
+            "match",
+            background="#05FFA1"  # Neon green
+        )
+        self.text_display.tag_configure(
+            "overlap",
+            background="#FF3F3F"  # Neon red
+        )
+        
+        # Right side - Controls
+        right_frame = ttk.Frame(paned)
+        paned.add(right_frame, weight=1)
+        
+        # Category toggle buttons
+        ttk.Label(
+            right_frame,
+            text="カテゴリー CATEGORIES",
+            font=ViewerTheme.HEADER_FONT
+        ).pack(pady=10)
+        
+        self.category_vars = {}
+        for category in ["headers", "subheaders", "body", "footnotes"]:
+            var = tk.BooleanVar()
+            self.category_vars[category] = var
+            
+            count = self._get_category_count(category)
+            tk.Checkbutton(
+                right_frame,
+                text=f"{ViewerText.LABELS[category]} ({count})",
+                variable=var,
+                command=lambda c=category: self.toggle_category(c),
+                bg=ViewerTheme.BG_COLOR,
+                fg=ViewerTheme.FG_COLOR,
+                selectcolor=ViewerTheme.ACCENT_COLOR,
+                activebackground=ViewerTheme.BG_COLOR,
+                activeforeground=ViewerTheme.FG_COLOR
+            ).pack(anchor=tk.W, padx=5, pady=2)
+            
+        # Stats
+        stats_frame = ttk.LabelFrame(
+            right_frame, 
+            text="トウケイ STATISTICS",
+            padding=10
+        )
+        stats_frame.pack(fill=tk.X, padx=5, pady=10)
+        
+        self.stats_label = ttk.Label(
+            stats_frame,
+            text=self._get_stats_text(),
+            font=ViewerTheme.MONO_FONT
+        )
+        self.stats_label.pack()
+        
+        # Load initial content
+        self._load_content()
+        
+    def _find_overlaps(self):
+        """Find text that matches multiple categories"""
+        overlaps = []
+        all_texts = {}
+        
+        for category in ["headers", "subheaders", "body", "footnotes"]:
+            for block in getattr(self.extracted, category):
+                if block.text in all_texts:
+                    overlaps.append(block.text)
+                all_texts[block.text] = category
+                
+        return overlaps
+        
+    def _get_category_count(self, category):
+        """Get count of matches for category"""
+        return len(getattr(self.extracted, category))
+        
+    def _get_stats_text(self):
+        """Get statistics summary"""
+        total = sum(self._get_category_count(c) for c in ["headers", "subheaders", "body", "footnotes"])
+        return (
+            f"Total matches: {total}\n"
+            f"Overlaps: {len(self.overlaps)}\n"
+        )
+        
+    def _load_content(self):
+        """Load all content into text display"""
+        self.text_display.delete(1.0, tk.END)
+        
+        # Load content from extracted text
+        for category in ["headers", "subheaders", "body", "footnotes"]:
+            for block in getattr(self.extracted, category):
+                start = self.text_display.index("end-1c")
+                self.text_display.insert(tk.END, f"{block.text}\n\n")
+                end = self.text_display.index("end-1c")
+                
+                # Store text range for category
+                if not hasattr(self, f"{category}_ranges"):
+                    setattr(self, f"{category}_ranges", [])
+                getattr(self, f"{category}_ranges").append((start, end, block.text))
+                
+                # Mark overlaps
+                if block.text in self.overlaps:
+                    self.text_display.tag_add("overlap", start, end)
+                    
+    def toggle_category(self, category):
+        """Toggle highlighting for category"""
+        # Clear previous highlighting
+        self.text_display.tag_remove("match", "1.0", tk.END)
+        
+        # Add highlighting for checked categories
+        for cat, var in self.category_vars.items():
+            if var.get():
+                ranges = getattr(self, f"{cat}_ranges")
+                for start, end, _ in ranges:
+                    self.text_display.tag_add("match", start, end)
+

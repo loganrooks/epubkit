@@ -985,3 +985,8 @@ def test_unsupervised_pattern_extraction():
                           for name, _ in pattern)
         assert 'p' in pattern_names  # Should find paragraph patterns
         
+def test_empty_input():
+    """Test edge cases"""
+    assert extract_supervised_patterns({}) == {'status': 'success', 'patterns': {}}
+    assert extract_unsupervised_patterns("") == {}
+

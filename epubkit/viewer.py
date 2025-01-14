@@ -11,7 +11,7 @@ from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, replace
 import json
 from epubkit.debug import filter_traceback, setup_logging
-from epubkit.dialogueUI import DialogText, EPUBTagSelectorUI, DialogStyle, PatternReviewDialog, SelectionReviewDialogUI, TOCExtractorDialogUI, TOCExtractorText, VaporwaveFormatter
+from epubkit.dialogueUI import DialogText, EPUBTagSelectorUI, DialogStyle, PatternReviewDialog, PatternTestDialog, SelectionReviewDialogUI, TOCExtractorDialogUI, TOCExtractorText, VaporwaveFormatter
 from epubkit.parser import  ExtractedText, HTMLCategoryExtractor, HTMLInfo, ImmutableTagInfo, TOCEntry, TOCExtractor, extract_categorized_text, CategoryDict
 from epubkit.search import SearchResult, SemanticSearch
 from PIL import Image, ImageTk
@@ -1549,6 +1549,19 @@ class TextSearchViewer(tk.Toplevel):
             if hasattr(self, 'desktop'):
                 self.desktop.toggle_animations(dialog.result['animations'])
 
+    def _on_toc_select(self, event):
+        """Handle TOC selection"""
+        selection = self.toc_tree.selection()
+        if selection:
+            item = self.toc_tree.item(selection[0])
+            # Get text range from item values
+            start, end = item["values"]
+            if start != 'None' and end != 'None':
+                # Scroll document viewer
+                self.document_viewer.text.see(start)
+                self.document_viewer.text.tag_add("sel", start, end)
+
+
     def load_epub(self):
         """Handle EPUB file loading"""
         file_path = filedialog.askopenfilename(
@@ -1657,18 +1670,47 @@ class TextSearchViewer(tk.Toplevel):
                 ViewerText.TITLES["error"],
                 "Failed to open music player. Check console for details."
             )
+        
+    def update_toc_tree(self, toc_entries: List[TOCEntry]):
+        """Update TOC tree with entries"""
+        self.toc_tree.delete(*self.toc_tree.get_children())
+        
+        def add_entries(entries, parent=""):
+            for entry in entries:
+                item_id = self.toc_tree.insert(
+                    parent, "end",
+                    text=entry.title,
+                    values=(entry.start_pos, entry.end_pos)
+                )
+                if entry.children:
+                    add_entries(entry.children, item_id)
+                    
+        add_entries(toc_entries)
+
     def perform_search(self):
         """Execute search and display results"""
         query = self.search_bar.search_var.get()
-        category = self.search_bar.category_var.get().lower()
-        
-        category_filter = category if category != "all" else None
-        results = self.search.search(query, category_filter=category_filter)
-        
-        self.results_list.clear()
-        for result in results:
-            self.results_list.add_result(result)
+        if not query:
+            return
             
+        category = self.search_bar.category_var.get().lower()
+        category_filter = category if category != "all" else None
+        
+        try:
+            results = self.search.search(
+                query, 
+                category_filter=category_filter
+            )
+            
+            self.results_list.clear()
+            for result in results:
+                self.results_list.add_result(result)
+                
+        except Exception as e:
+            logging.error(f"Search failed: {e}")
+            self._handle_error(e)
+
+
     def view_context(self, result: SearchResult):
         """Show result in context window"""
         dialog = tk.Toplevel(self)
@@ -1703,10 +1745,386 @@ class TextSearchViewer(tk.Toplevel):
             name = self.collections.notebook.tab(collection, "text")
             self.collections.add_quote(name, result)
 
+    def process_epub(self, file_path: str) -> Optional[bool]:
+        """
+        Process EPUB file and setup search interface
+        Returns: 
+            True if successful
+            False if user cancelled
+            None if error occurred
+        """
+        try:
+            # Validate file
+            epub_path = Path(file_path)
+            if not epub_path.exists():
+                raise FileNotFoundError(f"EPUB file not found: {file_path}")
+            self.epub_path = str(epub_path)
+
+            if False:
+                # 1. Tag Selection with proper cancel handling
+                html_map, tag_selections = self._get_tag_selections()
+                if tag_selections is None:  # User cancelled
+                    return False
+                if not tag_selections:  # No selections made
+                    raise ValueError("No tag selections made")
+
+                # 2. Review selections
+                confirmed_selections = self._confirm_tag_selections(tag_selections)
+                if confirmed_selections is None:  # User cancelled
+                    return False
+                if not confirmed_selections:
+                    raise ValueError("Tag selections not confirmed")
+                
+                # 3. Review patterns
+                extractor = self._create_and_review_extractor(confirmed_selections, html_map)
+                if extractor is None:  # User cancelled
+                    return False
+                if not extractor:
+                    raise ValueError("Failed to create extractor")
+
+                # 3. Extract text with progress
+                extracted_text = self._extract_text(confirmed_selections)
+                if not extracted_text:
+                    raise ValueError("No text extracted")
+                
+            #TOC mode
+            # 1. Load up ToCExtractorDialogue
+
+            extracted_toc = self._extract_toc_dialogue(epub_path)
+            if extracted_toc is False:
+                return False
+            elif extracted_toc is None:
+                raise ValueError("TOC extraction failed.")
+            
+            if DEBUG:
+                print(f"Reducing size of ToC for debugging...")
+                extracted_toc = extracted_toc[:5]
+
+            # 5. Create search index with progress
+            search = self._create_search_index_from_toc(extracted_toc)
+            if not search:
+                raise ValueError("Failed to create search index.")
+                
+            return search, extracted_toc
+
+        except Exception as e:
+            logging.error(f"Failed to process EPUB: {e}")
+            self._handle_error(e)
+            return None
+
+        finally:
+            # Cleanup any resources if needed
+            self._cleanup_processing()
+
+    def _cleanup_processing(self):
+        """Clean up any resources used during processing"""
+        try:
+            # Clean up any temporary files
+            # Reset any processing state
+            pass
+        except Exception as e:
+            logging.error(f"Error during cleanup: {e}")
+
+    def _get_tag_selections(self) -> Optional[Tuple[Dict, Dict]]:
+        """Get user tag selections"""
+        try:
+            dialog = EPUBTagSelectorUI(
+                parent=self,
+                epub_path=self.epub_path,
+                title=ViewerText.TITLES["epub"],
+                style=ViewerTheme,
+                ui_text=ViewerText
+            )
+            self.wait_window(dialog)
+            
+            if not hasattr(dialog, 'result') or dialog.result is None:
+                return None
+                
+            return dialog.result
+            
+        except Exception as e:
+            logging.error(f"Tag selection failed: {e}")
+            raise
+            
+    def _confirm_tag_selections(self, selections: Dict) -> Optional[Dict]:
+        """Confirm tag selections with user"""
+        try:
+            dialog = SelectionReviewDialogUI(
+                parent=self,
+                selections=selections,
+                title=ViewerText.TITLES["review"],
+                style=ViewerTheme,
+                ui_text=ViewerText
+            )
+            self.wait_window(dialog)
+            
+            if not hasattr(dialog, 'result'):
+                return None
+                
+            return dialog.result
+            
+        except Exception as e:
+            logging.error(f"Selection review failed: {e}")
+            raise
+            
+    def _create_and_review_extractor(
+        self,
+        selections: CategoryDict[Tuple[str, Tuple[ImmutableTagInfo, ...]]],
+        html_map: Dict[str, HTMLInfo]
+    ) -> Optional[HTMLCategoryExtractor]:
+        """Create and review extractor"""
+        try:
+            dialog = PatternReviewDialog(
+                parent=self,
+                selections=selections,
+                html_map=html_map,
+                title=ViewerText.TITLES["pattern_review"],
+                style=ViewerTheme,
+                ui_text=ViewerText
+            )
+            self.wait_window(dialog)
+            
+            if not hasattr(dialog, 'result') or not dialog.result:
+                return None
+                
+            return HTMLCategoryExtractor(dialog.result)
+            
+        except Exception as e:
+            logging.error(f"Pattern review failed: {e}")
+            raise
+
+    def _extract_text(self, selections: Dict) -> Optional[ExtractedText]:
+        """Extract text with progress dialog"""
+        progress = None
+        try:
+            progress = RetroProgressDialog(
+                self,
+                title=ViewerText.TITLES["extracting"]
+            )
+            progress.pack_dialog()
+            
+            extractor = HTMLCategoryExtractor(selections)
+            extracted = extract_categorized_text(
+                self.epub_path,
+                extractor=extractor,
+                progress_callback=progress.update_progress
+            )
+            return extracted
+            
+        except Exception as e:
+            logging.error(f"Text extraction failed: {e}")
+            raise
+            
+        finally:
+            if progress:
+                progress.destroy()
+
+    def _test_patterns(self, extracted: ExtractedText) -> Optional[ExtractedText]:
+        """Test and verify extracted patterns"""
+        try:
+            dialog = PatternTestDialog(
+                parent=self,
+                extracted=extracted,
+                title=ViewerText.TITLES["test"],
+                style=ViewerTheme,
+                ui_text=ViewerText
+            )
+            self.wait_window(dialog)
+            
+            if not hasattr(dialog, 'result'):
+                return None
+                
+            return dialog.result
+            
+        except Exception as e:
+            logging.error(f"Pattern testing failed: {e}")
+            raise
+
+    def _extract_toc_dialogue(self, epub_path: Path) -> Optional[List[TOCEntry]]:
+
+        try:
+            ui_text = VaporwaveFormatter.format_dialog_text(TOCExtractorText)
+
+            dialogue = TOCExtractorDialogUI(
+                parent=self,
+                epub_path=epub_path,
+                title=ViewerText.TITLES["toc"],
+                style=ViewerTheme,
+                ui_text=ui_text
+            )
+            self.wait_window(dialogue)
+
+            if not hasattr(dialogue, 'result') or dialogue.result is None:
+                return None
+            
+            if dialogue.result is False:
+                return False
+            
+            # REMEMBER NONE MEANS PREMATURE CLOSURE FALSE IS USER CANCELLED
+
+
+            return dialogue.result
+
+        except Exception as e:
+            logging.error(f"TOC extraction failed: {e}")
+            raise
+
+    def _create_search_index_from_toc(self, toc_entries: List[TOCEntry]) -> Optional[SemanticSearch]:
+        """Create search index from TOC entries"""
+        progress = None
+        try:
+            progress = RetroProgressDialog(
+                self,
+                title=ViewerText.TITLES["embedding"]
+            )
+            progress.pack_dialog()
+            
+            search = SemanticSearch.from_extracted_toc(
+                toc_entries,
+                embedding_provider="glove",
+                progress_callback=progress.update_progress
+            )
+            return search
+            
+        except Exception as e:
+            logging.error(f"Search index creation failed: {e}")
+            raise
+            
+        finally:
+            if progress:
+                progress.destroy()
+
+    def _create_search_index(self, extracted: ExtractedText) -> Optional[SemanticSearch]:
+        """Create search index with progress"""
+        progress = None
+        try:
+            progress = RetroProgressDialog(
+                self,
+                title=ViewerText.TITLES["embedding"]
+            )
+            progress.pack_dialog()
+            
+            search = SemanticSearch.from_extracted_text(
+                extracted=extracted,
+                embedding_provider="glove",
+                progress_callback=progress.update_progress
+            )
+            return search
+            
+        except Exception as e:
+            logging.error(f"Search index creation failed: {e}")
+            raise
+            
+        finally:
+            if progress:
+                progress.destroy()
+
+    def _handle_error(self, error: Exception):
+        """Handle errors with filtered traceback and detailed logging"""
+        try:
+            # Get traceback
+            tb = error.__traceback__
+            filtered_tb = filter_traceback(tb)
+            
+            # Log detailed error info
+            if DEBUG:
+                logger.error(
+                    "Error occurred\n"
+                    f"Error Type: {type(error).__name__}\n"
+                    f"Error Message: {str(error)}\n"
+                    f"Time: {datetime.now().isoformat()}\n"
+                    f"Context: {self.__class__.__name__}\n"
+                    f"Traceback:\n{filtered_tb}\n"
+                    f"Full traceback:\n{''.join(traceback.format_tb(tb))}"
+                )
+            
+            # Show error to user
+            messagebox.showerror(
+                ViewerText.TITLES["error"],
+                f"{ViewerText.MESSAGES['process_error']}: {str(error)}\n\n"
+                f"{filtered_tb}"
+            )
+                
+        except Exception as e:
+            # Log fallback error
+            if DEBUG:
+                logger.critical(
+                    "Error handling error\n"
+                    f"Handler error: {str(e)}\n"
+                    f"Original error: {str(error)}"
+                )
+            
+            # Fallback error dialog
+            messagebox.showerror(
+                "Error",
+                f"Error handling error: {str(e)}\n"
+                f"Original error: {str(error)}" 
+            )
+
+class RetroProgressDialog(tk.Toplevel):
+    """Windows 95 style progress dialog"""
+    def __init__(self, parent, title):
+        super().__init__(parent)
+        self.title(title)
+        self.geometry("300x150")
+        self.transient(parent)
+        self.resizable(False, False)
+        
+        # Windows 95 styling
+        self.configure(bg=ViewerTheme.BG_COLOR)
+        self.overrideredirect(True)
+        
+        # Header
+        header = tk.Frame(
+            self, 
+            bg=ViewerTheme.ACCENT_COLOR,
+            height=20
+        )
+        header.pack(fill=tk.X)
+        
+        # Title
+        tk.Label(
+            header,
+            text=title,
+            bg=ViewerTheme.ACCENT_COLOR,
+            fg=ViewerTheme.BG_COLOR,
+            font=ViewerTheme.MONO_FONT
+        ).pack(side=tk.LEFT, padx=5)
+        
+        self.progress_var = tk.IntVar()
+        
+    def pack_dialog(self):
+        """Setup progress bar and message"""
+        # Message
+        self.message = tk.Label(
+            self,
+            text="Processing EPUB file...",
+            bg=ViewerTheme.BG_COLOR,
+            fg=ViewerTheme.FG_COLOR,
+            font=ViewerTheme.MONO_FONT
+        ).pack(pady=20)
+        
+        # Progress bar
+        self.progress = ttk.Progressbar(
+            self,
+            mode='indeterminate',
+            length=250
+        )
+        self.progress.pack(padx=20, pady=10)
+        self.progress.start()
+
+    def update_progress(self, message: str, value: int):
+        """Update progress bar value"""
+        self.message = VaporwaveFormatter.format_title(message)
+        self.progress_var.set(value)
+        self.progress.update_idletasks()
+
+
+
 class MockSearch:
     """Mock search implementation for testing the viewer"""
     def __init__(self):
-        self.content = [
+        self.content =[
             SearchResult(
                 text="In a cyberpunk future where neon lights pierce through perpetual rain, "
                      "the boundaries between human consciousness and digital reality blur. "

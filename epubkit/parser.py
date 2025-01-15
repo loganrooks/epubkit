@@ -1,5 +1,6 @@
 from __future__ import annotations
-from functools import  singledispatchmethod
+from functools import  reduce, singledispatchmethod
+import logging
 import os
 import tkinter as tk
 from tkinter import ttk
@@ -10,7 +11,7 @@ from ebooklib import epub
 from bs4 import BeautifulSoup
 import re
 from typing import (
-    Any, Dict, FrozenSet, List, Set, Optional, Tuple, TypedDict, NamedTuple, 
+    Any, Dict, FrozenSet, Iterator, List, Set, Optional, Tuple, TypedDict, NamedTuple, 
     Protocol, override, runtime_checkable, Final, TYPE_CHECKING
 )
 from openai import OpenAI  # type: ignore
@@ -20,7 +21,7 @@ from pathlib import Path
 from dataclasses import dataclass, field
 from typing_extensions import Literal
 
-from epubkit.utils import is_complete_sentence
+from epubkit.utils import is_complete_sentence, normalize_quotes, strings_equal
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 if TYPE_CHECKING:
@@ -1281,20 +1282,21 @@ class TOCExtractor:
     """Extracts TOC and content from EPUB files"""
     def __init__(self, epub_path: str):
         self.epub_path = epub_path
-        self.book = epub.read_epub(epub_path)
+        self.book = epub.read_epub(epub_path, options={"ignore_ncx": True})
         self.toc_page = None
         self.toc_structure: List[TOCEntry] = []
         self.toc_style: Optional[TOCStyle] = None
         
         # Track TOC patterns once identified
         self.toc_patterns: Dict[int, Dict] = field(default_factory=dict)  # level -> pattern info
-        self.artifact_patterns: Set[str | re.Pattern] = [
+        self.artifact_patterns: Set[str | re.Pattern] = {
             r'^\s*\d+\s*$',  # Page numbers
             r'^\s*$',  # Empty lines
             r'^\s*[•⁃·]\s*$',  # List bullets
             r'^\s*[ivxlcdmIVXLCDM]+\s*$',  # Roman numerals
             r'^\\x0c$'  # Page break characters
-        ]
+        }
+
         self.toc_header_patterns: List[HeaderTagSearch] = [
             HeaderTagSearch(tag='h1', string=re.compile(r'^\s*(table of contents|contents)\s*$', re.I)),
             HeaderTagSearch(tag='h2', string=re.compile(r'^\s*(table of contents|contents)\s*$', re.I)),
@@ -1534,64 +1536,79 @@ class TOCExtractor:
         
         return merged_text, merged_html
 
-    def extract_text_blocks(self) -> None:
+    
+    def _flatten_toc_entries(self, entries: List[TOCEntry]) -> Iterator[TOCEntry]:
+        """Flatten nested TOC structure using generator"""
+        for entry in entries:
+            yield entry
+            if entry.children:
+                yield from self._flatten_toc_entries(entry.children)
+
+    
+
+    def extract_text_blocks(self, remove_artifacts=True) -> None:
         """Extract text and HTML blocks, assigning each to appropriate TOC entry"""
         # Build entry lookup by title
-        entry_map = {}
-        def map_entries(entry: TOCEntry):
-            entry_map[entry.title] = entry
-            for child in entry.children:
-                map_entries(child)
-        for entry in self.toc_structure:
-            map_entries(entry)
-            
+        entry_map = {normalize_quotes(entry.title): entry for entry in self._flatten_toc_entries(self.toc_structure)}
+        toc_hrefs = {entry.href.split('#')[0] for entry in self._flatten_toc_entries(self.toc_structure)}
+        
+
         # Process each index file
         for i, item in enumerate(self.book.get_items_of_type(ebooklib.ITEM_DOCUMENT)):
-            content = item.get_body_content().decode('utf-8')
-            soup = BeautifulSoup(content, 'html.parser')
-            
-            # Extract text and HTML blocks in parallel
-            text_blocks = []
-            html_blocks = []
-            for block in soup.find_all(['p', 'div']):  # Add other relevant tags
-                text = block.get_text().strip()
-                if text and not self._is_artifact(text):
-                    text_blocks.append(text)
-                    html_blocks.append(str(block))
+            if item.file_name in toc_hrefs: 
+
+                html_contents = item.get_body_content().decode('utf-8')
+                soup = BeautifulSoup(html_contents, 'html.parser')
+       
+                # Find entry for this file
+                current_entry = next(
+                    (entry for entry in entry_map.values()),
+                    None
+                ) 
+
+                if current_entry:
+                    # Extract paragraphs with text and HTML simultaneously
+                    for p in soup.find_all('p'):
+                        text = p.get_text().strip()
+                        if text and (not remove_artifacts or not self._is_artifact(text)):
+                            if any(strings_equal(text.strip(), entry_title.strip()) for entry_title in entry_map):
+                                # Switch to new entry if text matches header
+                                current_entry = entry_map.pop(normalize_quotes(text))
+                                
+                            else:
+                                # Add block to current entry
+                                current_entry.text_blocks.append(text)
+                                current_entry.html_blocks.append(str(p))
+        if len(entry_map) > 1:
+            logging.warning(f"Entries not found in book: {entry_map.keys()}")
+
+
+                # Assign blocks to entries
+                # if current_entry:
+                #     text_buffer = []
+                #     html_buffer = []
                     
-            # Find entry for this file
-            current_entry = None
-            for entry in entry_map.values():
-                if item.file_name.endswith(entry.href.split('#')[0]):
-                    current_entry = entry
-                    break
+                #     for text, html in zip(text_blocks, html_blocks):
+                #         # Check if block is a header
+                #         if text in entry_map:
+                #             # Merge and save buffered blocks
+                #             if text_buffer and current_entry:
+                #                 merged_text, merged_html = self._merge_blocks(text_buffer, html_buffer)
+                #                 current_entry.text_blocks.extend(merged_text)
+                #                 current_entry.html_blocks.extend(merged_html)
+                #             # Switch to new entry    
+                #             current_entry = entry_map[text]
+                #             text_buffer = []
+                #             html_buffer = []
+                #         else:
+                #             text_buffer.append(text)
+                #             html_buffer.append(html)
                     
-            # Assign blocks to entries
-            if current_entry:
-                text_buffer = []
-                html_buffer = []
-                
-                for text, html in zip(text_blocks, html_blocks):
-                    # Check if block is a header
-                    if text in entry_map:
-                        # Merge and save buffered blocks
-                        if text_buffer and current_entry:
-                            merged_text, merged_html = self._merge_blocks(text_buffer, html_buffer)
-                            current_entry.text_blocks.extend(merged_text)
-                            current_entry.html_blocks.extend(merged_html)
-                        # Switch to new entry    
-                        current_entry = entry_map[text]
-                        text_buffer = []
-                        html_buffer = []
-                    else:
-                        text_buffer.append(text)
-                        html_buffer.append(html)
-                
-                # Merge and save remaining blocks
-                if text_buffer and current_entry:
-                    merged_text, merged_html = self._merge_blocks(text_buffer, html_buffer)
-                    current_entry.text_blocks.extend(merged_text)
-                    current_entry.html_blocks.extend(merged_html)
+                #     # Merge and save remaining blocks
+                #     if text_buffer and current_entry:
+                #         merged_text, merged_html = self._merge_blocks(text_buffer, html_buffer)
+                #         current_entry.text_blocks.extend(merged_text)
+                #         current_entry.html_blocks.extend(merged_html)
 
                     
 

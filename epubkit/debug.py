@@ -1,12 +1,20 @@
-import datetime
+from datetime import datetime
 import json
 import logging
+import os
 from pathlib import Path
 import traceback
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, NamedTuple, Tuple
 from venv import logger
 from bs4 import Tag
 from colorama import Fore, Style, init
+from functools import wraps
+from typing import Any, Callable, Dict, List
+import inspect
+import pytest
+from dataclasses import dataclass, field
+from datetime import datetime
+
 
 # Initialize colorama
 init()
@@ -43,78 +51,119 @@ def filter_traceback(tb) -> str:
 import inspect
 
 def get_class_name():
-    # Get the current frame
+    """Get name of class where function is called"""
     frame = inspect.currentframe()
-    # Get the caller's frame
-    caller_frame = frame.f_back
-    # Get the caller's class name
-    class_name = ''
-    for obj in caller_frame.f_locals.values():
-        if isinstance(obj, type):
-            class_name = obj.__name__
-            break
-    return class_name
+    try:
+        # Walk up call stack to find first non-debug.py frame
+        while frame:
+            if frame.f_code.co_filename != __file__:
+                # Check frame locals for class instance
+                for obj in frame.f_locals.values():
+                    if hasattr(obj, '__class__'):
+                        return obj.__class__.__name__
+            frame = frame.f_back
+    finally:
+        del frame  # Avoid reference cycles
+    return ''
 
 def get_file_name():
-    # Get the current frame
+    """Get name of file where function is called"""
     frame = inspect.currentframe()
-    # Get the caller's frame
-    caller_frame = frame.f_back
-    # Get the file name from the caller's frame
-    file_name = caller_frame.f_code.co_filename
-    return file_name
+    try:
+        # Walk up call stack to find first non-debug.py frame
+        while frame:
+            if frame.f_code.co_filename != __file__:
+                # Get just the filename without path or extension
+                return os.path.splitext(os.path.basename(frame.f_code.co_filename))[0]
+            frame = frame.f_back
+    finally:
+        del frame
+    return ''
 
 def get_log_name():
+    """Generate log name from caller's class and file"""
     class_name = get_class_name()
     file_name = get_file_name()
-    return f"{class_name}_{file_name}"
+    # Combine class and file names, filtering out empty strings
+    parts = [p for p in (class_name, file_name) if p]
+    return '_'.join(parts)
+
+
 
 def setup_logging():
-    """Configure logging"""
-    # Create logs directory
-    log_dir = Path("logs")
+    """Configure logging for caller's context"""
+    # Get caller context
+    context = get_caller_context()
+    module_name = f"epubkit.{context.file_name}"
+    if context.class_name:
+        module_name += f".{context.class_name}"
+    
+    # Create logs directory in workspace root
+    workspace_root = Path(__file__).parent.parent
+    log_dir = workspace_root / "logs"
     log_dir.mkdir(exist_ok=True)
     
-    # Configure logging
+    # Configure logging with caller-specific file
+    log_path = log_dir / f"{context.file_name}.log"
     logging.basicConfig(
-        filename=log_dir / f"{get_log_name()}.log",
+        filename=log_path,
         level=logging.DEBUG,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S'
     )
-    return logging.getLogger("epubkit.viewer")
+    
+    return logging.getLogger(module_name)
 
-def log_error(self, error: Exception):
+class CallerContext(NamedTuple):
+    function_name: str
+    class_name: str
+    file_name: str
+
+def get_caller_context() -> CallerContext:
+    """Get the context where function was called"""
+    frame = inspect.currentframe()
+    try:
+        # Walk up call stack to find first non-debug.py frame
+        while frame:
+            if frame.f_code.co_filename != __file__:
+                # Get function name
+                func_name = frame.f_code.co_name
+                
+                # Get class name if exists
+                class_name = ''
+                for obj in frame.f_locals.values():
+                    if hasattr(obj, '__class__'):
+                        class_name = obj.__class__.__name__
+                        break
+                
+                # Get filename without path/extension
+                file_name = Path(frame.f_code.co_filename).stem
+                
+                return CallerContext(func_name, class_name, file_name)
+            frame = frame.f_back
+    finally:
+        del frame  # Avoid reference cycles
+    
+    return CallerContext('', '', '')
+
+def log_error(error: Exception):
         """Handle errors with filtered traceback and detailed logging"""
         tb = error.__traceback__
         filtered_tb = filter_traceback(tb)
+        context = get_caller_context()
             
         logger.error(
             "Error occurred\n"
             f"Error Type: {type(error).__name__}\n"
             f"Error Message: {str(error)}\n"
             f"Time: {datetime.now().isoformat()}\n"
-            f"Context: {self.__class__.__name__}\n"
+            f"Function: {context.function_name}\n"
+            f"Class: {context.class_name}\n"
+            f"File: {context.file_name}\n"
             f"Traceback:\n{filtered_tb}\n"
             f"Full traceback:\n{''.join(traceback.format_tb(tb))}"
         )
-            
-
-def main():
-    try:
-        # Your code that may raise an exception
-        raise ValueError("An example error")
-    except Exception as e:
-        # Get the current traceback
-        tb = e.__traceback__
-        # Filter and format the traceback
-        filtered_tb = filter_traceback(tb)
-        # Print the filtered traceback
-        print(filtered_tb)
-
-if __name__ == "__main__":
-    main()
-
+        
 
 def debug_print_dict(d: Dict, indent: int = 0, title: str = None) -> None:
     """Pretty prints nested dictionary structures with colors"""
@@ -199,3 +248,80 @@ def debug_print_pattern_match(pattern: Dict, tag: Tag) -> None:
         print(f"  ✗ {key}:")
         print(f"    Expected: {expected}")
         print(f"    Actual:   {actual}")
+
+
+
+
+@dataclass
+class ValueTracker:
+    name: str
+    value_history: List[tuple[Any, str, datetime]] = field(default_factory=list)
+    
+    def track(self, value: Any, location: str):
+        self.value_history.append((value, location, datetime.now()))
+        
+    def get_history(self) -> str:
+        return "\n".join(
+            f"Value: {v}, Location: {loc}, Time: {t}" 
+            for v, loc, t in self.value_history
+        )
+
+def debug_test(watched_vars: List[str] = None):
+    """Decorator to add debugging info to tests"""
+    def decorator(test_func: Callable):
+        @wraps(test_func)
+        def wrapper(*args, **kwargs):
+            # Initialize value trackers
+            trackers = {
+                name: ValueTracker(name)
+                for name in (watched_vars or [])
+            }
+            
+            # Create tracking function in closure
+            def _track(name: str, value: Any) -> Any:
+                if name in trackers:
+                    frame = inspect.currentframe()
+                    location = f"{frame.f_code.co_filename}:{frame.f_lineno}"
+                    trackers[name].track(value, location)
+                    del frame
+                return value
+            
+            try:
+                # Make _track available to test function
+                test_globals = test_func.__globals__
+                test_globals['_track'] = _track
+                
+                # Run test
+                result = test_func(*args, **kwargs)
+                
+                return result
+                
+            except AssertionError as e:
+                # Build debug info
+                debug_info = [
+                    "\n=== Test Debug Info ===",
+                    f"Test: {test_func.__name__}",
+                    f"Time: {datetime.now()}",
+                    "\nValue History:"
+                ]
+                
+                for name, tracker in trackers.items():
+                    debug_info.extend([
+                        f"\n{name}:",
+                        tracker.get_history()
+                    ])
+                
+                debug_info.extend([
+                    "\nTest Source:",
+                    inspect.getsource(test_func)
+                ])
+                
+                raise AssertionError("\n".join(debug_info)) from e
+                
+            finally:
+                # Clean up
+                if '_track' in test_globals:
+                    del test_globals['_track']
+                    
+        return wrapper
+    return decorator

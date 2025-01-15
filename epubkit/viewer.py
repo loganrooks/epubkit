@@ -1484,11 +1484,17 @@ class TextSearchViewer(tk.Toplevel):
 
         if DEBUG:
             epub_path = Path(__file__).parent.resolve() / 'resources' / 'epubs' / 'Being and Time - Martin Heidegger.epub'
-            search, extracted_toc = self.process_epub(epub_path)
-            self.search = search
-            self.document_viewer.load_document_from_toc(extracted_toc)
-            self.update_toc_tree(extracted_toc)
-        
+            result = self.process_epub(epub_path)
+            if result:
+                print(result)
+                search, extracted_toc = result
+                self.search = search
+                self.document_viewer.load_document_from_toc(extracted_toc)
+                self.update_toc_tree(extracted_toc)
+            elif result is None:
+                raise ValueError("Error processing EPUB")
+           
+            
     def setup_toolbar(self):
         """Create Windows 95 style toolbar"""
         toolbar = ttk.Frame(self)
@@ -1967,7 +1973,7 @@ class TextSearchViewer(tk.Toplevel):
 
         except Exception as e:
             logging.error(f"TOC extraction failed: {e}")
-            raise
+            raise 
 
     def _create_search_index_from_toc(self, toc_entries: List[TOCEntry]) -> Optional[SemanticSearch]:
         """Create search index from TOC entries"""

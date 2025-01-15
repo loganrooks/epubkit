@@ -1,0 +1,4 @@
+{
+    "debugpy.debugJustMyCode": true,
+    "jupyter.debugJustMyCode": false
+}

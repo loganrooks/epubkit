@@ -1971,21 +1971,14 @@ class TOCMoveDialog(BaseDialog):
         }
         self.destroy()
 
-    
-
 if __name__ == "__main__":
-    app = tk.Tk()
-    app.title("Dialog Test")
-    
     import tkinter as tk
-
     from epubkit.dialogueUI import TOCExtractorDialogUI, TOCExtractorText, VaporwaveFormatter
     from epubkit.viewer import ViewerText, ViewerTheme
 
     root = tk.Tk()
     root.title("Table of Contents")
-    root.geometry("1920x1080+1080+840")
-    root.withdraw()
+    root.geometry("1200x1000")
 
     epub_dir = Path("./epubkit/resources/epubs").resolve()
     epub_files = list(epub_dir.glob("*.epub"))
@@ -2002,8 +1995,14 @@ if __name__ == "__main__":
                     style=ViewerTheme,
                     ui_text=ui_text
                 )
+    dialogue.lift()
+    dialogue.update_idletasks()
+
+    root.withdraw()
+
     root.wait_window(dialogue)
 
     toc = dialogue.result
 
     root.mainloop()
+

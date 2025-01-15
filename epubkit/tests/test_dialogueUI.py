@@ -217,13 +217,17 @@ class TestHTMLTextViewer:
     @debug_test(['width', 'content', 'line_lengths'])
     def test_fixed_width_formatting(self, setup_viewer):
         """Test fixed-width text formatting"""
+        WIDTH = 30
+
         root, viewer = setup_viewer
-        root.geometry("100x100")
+        root.geometry(f"{WIDTH + 10}x100")
         root.update_idletasks()
 
+
         new_viewer = HTMLTextViewer(root, viewer.style, fixed_width=True)
-        new_viewer.text.configure(width=20)
-        new_viewer.pack(fill="both", expand=True)
+        new_viewer.pack(fill="both", expand=True, side="top", padx=5, pady=5)
+
+        new_viewer.update_idletasks()
       # Short width for testing
         
         long_text = "This is a very long paragraph that should be wrapped at word boundaries"
@@ -236,7 +240,8 @@ class TestHTMLTextViewer:
 
         line_lengths = _track('line_lengths', [len(line.strip()) for line in lines]) # type: ignore
 
-        assert all(len(line.strip()) <= 20 for line in lines if line.strip())
+        assert all(len(line.strip()) <= WIDTH for line in lines if line.strip())
+        assert len(lines[0].strip()) > WIDTH - 20  # First line should be long
 
     def test_multiple_resizes(self, setup_viewer):
         """Test multiple resize operations"""

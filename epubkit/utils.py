@@ -134,6 +134,45 @@ def is_ignored(paragraph, ignore_patterns: list[str]):
             return True
     return False
 
+def normalize_quotes(s: str | None) -> str:
+    """
+    Convert all types of single/double quotes into a standard form and remove them.
+    You can modify to keep them if you prefer, e.g. replacing them with a single symbol
+    instead of removing.
+    """
+    if s is None:
+        return ""
+    
+    # Replace fancy single quotes
+    s = s.replace("‘", "'").replace("’", "'")
+    # Replace fancy double quotes
+    s = s.replace("“", '"').replace("”", '"')
+
+    return s
+
+def clean_string(x: str) -> str:
+    if x is None:
+        return ""
+    x = normalize_quotes(x)
+    return " ".join(x.split())
+
+def strings_equal(s1: str, s2: str, case_sensitive: bool = True) -> bool:
+    """
+    Compare two strings after normalizing/removing any kind of
+    single/double/fancy quotes. Also normalizes whitespace.
+    """
+    # Normalize quotes and collapse whitespace
+    if not (s1 or s2):
+        return False
+    
+    s1_clean = clean_string(s1)
+    s2_clean = clean_string(s2)
+
+    if not case_sensitive:
+        s1_clean = s1_clean.lower()
+        s2_clean = s2_clean.lower()
+    
+    return s1_clean == s2_clean
     
 def clean_paragraphs(paragraphs: list[str], ignore_patterns=[r'^\d+$', r'^\x0c']):
     cleaned_paragraphs = []

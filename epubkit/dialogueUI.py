@@ -1738,9 +1738,6 @@ class TOCExtractorDialogUI(BaseDialog):
                 self.toc_backend.toc_structure.insert(position, entry)
             else:
                 raise ValueError(self.ui_text.MESSAGES["invalid_position"])
-        
-    
-
 
 class TOCEntryDialog(BaseDialog):
     """Dialog for creating/editing TOC entries"""
@@ -1970,6 +1967,502 @@ class TOCMoveDialog(BaseDialog):
             "position": position
         }
         self.destroy()
+
+class BlockReviewDialog(BaseDialog):
+    """Dialog for reviewing and removing text blocks"""
+    
+    def __init__(self, parent, title: str, text: str, html: str, 
+                 style: DialogStyle, ui_text: DialogText):
+        self.text = text
+        self.html = html
+        self.ui_text = ui_text
+        super().__init__(parent, title, style=style)
+        
+    def setup_ui(self):
+        # Text preview
+        text_frame = ttk.LabelFrame(
+            self, 
+            text=self.ui_text.TITLES["rendered_text"]
+        )
+        text_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        text_preview = tk.Text(text_frame, height=4, wrap=tk.WORD)
+        text_preview.insert("1.0", self.text)
+        text_preview.pack(fill=tk.X, padx=5, pady=5)
+        
+        # HTML preview  
+        html_frame = ttk.LabelFrame(
+            self, 
+            text=self.ui_text.TITLES["html_source"]
+        )
+        html_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        html_preview = tk.Text(html_frame, height=8, wrap=tk.WORD)
+        html_preview.insert("1.0", self.html)
+        html_preview.pack(fill=tk.X, padx=5, pady=5)
+        
+        # Buttons
+        btn_frame = ttk.Frame(self)
+        btn_frame.pack(fill=tk.X, padx=10, pady=10)
+        
+        ttk.Button(
+            btn_frame,
+            text=self.ui_text.BUTTONS["remove_pattern"],
+            command=self._remove
+        ).pack(side=tk.RIGHT, padx=5)
+        
+        ttk.Button(
+            btn_frame, 
+            text=self.ui_text.BUTTONS["cancel"],
+            command=self.destroy
+        ).pack(side=tk.RIGHT, padx=5)
+
+    def _remove(self):
+        if messagebox.askyesno(
+            self.ui_text.TITLES["block_review"],
+            self.ui_text.MESSAGES["confirm_remove_block"]
+        ):
+            self.result = 'remove'
+            messagebox.showinfo(
+                self.ui_text.TITLES["block_review"],
+                self.ui_text.MESSAGES["pattern_created"]
+            )
+            self.destroy()
+
+
+class HTMLTextViewer(ctk.CTkFrame):
+    def __init__(self, parent, style, enable_hover=True, on_select=None, fixed_width=True, chunk_size=50):
+        super().__init__(parent)
+        self.style = style
+        self.enable_hover = enable_hover
+        self.on_select = on_select
+        self.fixed_width = fixed_width
+        self.chunk_size = chunk_size
+        self.content_chunks = []
+        self.current_chunk = 0
+        self._last_width = 0
+        self.original_html = ""
+        self.parser = None
+
+        self.setup_ui()
+        self.configure_tags()
+        self._init_parser()
+
+    def setup_ui(self):
+        # Configure frame for expansion
+        self.grid_rowconfigure(0, weight=1)
+        self.grid_columnconfigure(0, weight=1)
+        
+        # Create container frame
+        self.container = ttk.Frame(self)
+        self.container.grid(row=0, column=0, sticky="nsew")
+        self.container.grid_rowconfigure(0, weight=1)
+        self.container.grid_columnconfigure(0, weight=1)
+        
+        # Create text widget
+        default_font = ('TkDefaultFont', 11)
+        self.text = tk.Text(
+            self.container,
+            wrap="none" if self.fixed_width else "word",
+            font=default_font,
+            bg=self.style.TEXT_STYLE["bg"],
+            fg=self.style.TEXT_STYLE["fg"],
+            insertbackground=self.style.TEXT_STYLE["fg"],
+            selectbackground=self.style.ACCENT_COLOR,
+            selectforeground=self.style.TEXT_STYLE["bg"],
+            padx=5,
+            pady=5,
+            cursor="arrow"
+        )
+        
+        # Create scrollbar
+        self.scrollbar = ttk.Scrollbar(
+            self.container, 
+            orient="vertical", 
+            command=self.text.yview
+        )
+        self.text.configure(yscrollcommand=self.scrollbar.set)
+        
+        # Grid layout
+        self.text.grid(row=0, column=0, sticky="nsew")
+        self.scrollbar.grid(row=0, column=1, sticky="ns")
+        
+        # Event bindings
+        if self.enable_hover:
+            self.text.bind("<Motion>", self._on_hover)
+            self.text.bind("<Leave>", self._on_leave)
+        self.text.bind("<Button-1>", self._on_click)
+        self.text.bind("<MouseWheel>", self._on_scroll)
+        self.text.bind('<Configure>', self._on_resize)
+        
+        # Initialize state
+        self.current_hover_tag = None
+        self.block_map = {}
+        
+    def configure_tags(self):
+        """Configure both formatting and highlighting tags"""
+        # Use the explicitly configured font instead of getting from widget
+        current_font = self.text['font']
+        if isinstance(current_font, str):
+            font_family, font_size = current_font.split()
+            font_size = int(font_size)
+        else:
+            font_family, font_size = current_font
+            
+        # Text formatting tags
+        self.text.tag_configure(
+            "bold", 
+            font=(font_family, font_size, 'bold')
+        )
+        self.text.tag_configure(
+            "italic",
+            font=(font_family, font_size, 'italic')
+        )
+        self.text.tag_configure(
+            "underline",
+            underline=1
+        )
+        
+        # Highlighting tags
+        self.text.tag_configure(
+            "hover",
+            background=self.style.HOVER_STYLE["background"],
+            foreground=self.style.HOVER_STYLE["foreground"]
+        )
+        self.text.tag_configure(
+            "selected",
+            background=self.style.ACCENT_COLOR,  # Use a valid color code
+            foreground=self.style.TEXT_STYLE["bg"]
+        )
+    def _init_parser(self):
+        """Initialize HTML parser for text display"""
+        if self.text and isinstance(self.block_map, dict):
+            self.text.delete("1.0", "end")
+
+            # Wait for widget to be drawn
+            self.update_idletasks()
+            
+            # Get actual width or use fallback
+            width = self.text.winfo_width()
+            if width <= 1:
+                # Use parent's width as fallback
+                width = self.winfo_width()
+                if width <= 1:
+                    # Use reasonable default if no width available
+                    width = 800
+
+            # Calculate initial width
+            char_width = self.text.tk.call('font', 'measure', self.text.cget('font'), 'x')
+            chars_per_line = self.text.winfo_width() // char_width
+            self._last_width = self.text.winfo_width()
+            
+            self.parser = HTMLTextParser(
+                self.text, 
+                self.block_map,
+                fixed_width=self.fixed_width,
+                width=chars_per_line
+            )
+        else:
+            self.parser = None
+
+    def set_html_content(self, html_content: str | list[str]):
+        """Parse and display HTML content with chunked loading"""
+        self.original_html = html_content
+        self.text.delete("1.0", "end")
+        self._init_parser()
+        
+        # Split content into chunks
+        if isinstance(html_content, str):
+            soup = BeautifulSoup(html_content, 'html.parser')
+            blocks = soup.find_all(['p', 'div', 'h1', 'h2', 'h3'])
+        elif isinstance(html_content, list):
+            blocks = html_content
+        else:
+            raise TypeError("Invalid content type")
+        
+        self.content_chunks = []
+        current_chunk = []
+        current_size = 0
+        
+        for block in blocks:
+            if current_size >= self.chunk_size:
+                self.content_chunks.append(''.join(map(str, current_chunk)))
+                current_chunk = []
+                current_size = 0
+            current_chunk.append(block)
+            current_size += len(str(block))
+            
+        if current_chunk:
+            self.content_chunks.append(''.join(map(str, current_chunk)))
+            
+        # Load first chunk
+        if self.content_chunks:
+            self._load_chunk(0)
+
+    def _load_chunk(self, index: int):
+        """Load a specific content chunk"""
+        if 0 <= index < len(self.content_chunks):
+            self.current_chunk = index
+            chunk_content = self.content_chunks[index]
+            self.parser.feed(chunk_content)
+    
+    def _on_resize(self, event):
+        """Handle window resize by updating text wrapping"""
+        # Only process if width actually changed
+        new_width = self.text.winfo_width()
+        if new_width != self._last_width:
+            self._last_width = new_width
+            # Convert pixels to approx char width
+            char_width = self.text.tk.call('font', 'measure', self.text.cget('font'), 'x')
+            chars_per_line = new_width // char_width
+            
+            # Recreate parser with new width
+            if self.parser:
+                self.text.delete("1.0", "end")
+                self.block_map.clear()
+                self.parser = HTMLTextParser(
+                    self.text,
+                    self.block_map,
+                    fixed_width=self.fixed_width,
+                    width=chars_per_line
+                )
+                # Reparse content with new width
+                self.parser.feed(self.original_html)
+            
+    def _on_scroll(self, event):
+        """Handle scroll events for lazy loading"""
+        # Calculate if we're near the end
+        visible_end = float(self.text.index("@0,%d" % self.text.winfo_height()))
+        total_lines = float(self.text.index("end-1c").split('.')[0])
+        
+        if visible_end >= total_lines * 0.8 and self.current_chunk < len(self.content_chunks) - 1:
+            self._load_chunk(self.current_chunk + 1)
+
+    def add_html_content(self, html_content: str):
+        """Parse and append HTML content with block tracking"""
+        self.original_html += html_content
+        if self.parser is None:
+            self.parser = self._init_parser()
+        self.parser.feed(html_content)
+
+    def _on_hover(self, event):
+        """Handle hover highlighting if enabled"""
+        if not self.enable_hover:
+            return
+            
+        # Get index at mouse position    
+        index = self.text.index(f"@{event.x},{event.y}")
+        
+        # Clear previous hover state
+        self.text.tag_remove("hover", "1.0", "end")
+        self.text.configure(cursor="arrow")
+        self.current_hover_tag = None
+        
+        # Find block tags at current position
+        tags = [tag for tag in self.text.tag_names(index) if tag.startswith("block_")]
+        
+        if tags:
+            block_tag = tags[0]  # Use first block tag found
+            # Get full range of the block
+            ranges = self.text.tag_ranges(block_tag)
+            if ranges and len(ranges) >= 2:
+                start, end = ranges[0], ranges[1]
+
+                # Add hover highlight to entire block
+
+                
+                self.text.tag_add("hover", start, end)
+                self.text.configure(cursor="hand2")
+                self.current_hover_tag = block_tag
+                
+    def _on_leave(self, event):
+        """Clear hover highlighting"""
+        if self.current_hover_tag:
+            self.text.tag_remove("hover", "1.0", "end")
+            self.text.configure(cursor="arrow")
+            self.current_hover_tag = None
+
+    def _on_click(self, event):
+        """Handle block selection and callback"""
+        index = self.text.index(f"@{event.x},{event.y}")
+        self.text.tag_remove("selected", "1.0", "end")
+        
+        for tag in self.text.tag_names(index):
+            if tag.startswith("block_"):
+                ranges = self.text.tag_ranges(tag)
+                start, end = str(ranges[0]), str(ranges[1])
+                self.text.tag_add("selected", start, end)
+                
+                # Call selection handler if provided
+                if self.on_select and tag in self.block_map:
+                    self.on_select(self.block_map[tag])
+                break
+@dataclass
+class HTMLBlock:
+    """Dataclass for storing HTML block info"""
+    block_id: int
+    text_start: str | None 
+    text_end: str | None
+    content: str
+    class_: str = ""
+    id: str = ""
+    parent: HTMLBlock = None
+    children: List[HTMLBlock] = field(default_factory=list)
+
+class HTMLTextParser(HTMLParser):
+    def __init__(self, 
+                 text_widget, 
+                 block_map, 
+                 fixed_width: bool = True,
+                 width: float = 80,
+                 block_tags: List[str] = ['p', 'h1', 'h2', 'h3']):
+        super().__init__()
+        self.text_widget = text_widget
+        self.block_map = block_map
+        self.fixed_width = fixed_width
+        self.width = width
+        self.current_tags: dict[int, str] = {} # tag depth and font tag
+        self.block_id = len(block_map)
+        self.current_block: HTMLBlock = None
+        self.current_line = []
+        self.current_line_buffer = []  # Store (text, tags) tuples
+        self.current_line_length = 0
+        self.block_tags = block_tags
+        
+        self.tag_map = {
+            'b': 'bold',
+            'strong': 'bold',
+            'i': 'italic', 
+            'em': 'italic',
+            'u': 'underline',
+            'h1': 'bold',
+            'h2': 'bold',
+            'h3': 'bold'
+        }
+        self.block_tags = ['p', 'h1', 'h2', 'h3']
+        self.font_classes = ['italic', 'bold']
+        self.tag_depth = 0
+        
+    def handle_starttag(self, tag, attrs):
+
+        # Handle formatting tags
+        attrs = dict(attrs)
+
+        if tag in self.tag_map:
+            self.current_tags[self.tag_depth] = self.tag_map[tag]
+
+        elif attrs.get('class', '') in self.font_classes:
+            self.current_tags[self.tag_depth] = attrs['class']
+            
+        # Start new paragraph block
+        if tag in self.block_tags and self.current_block is None:
+            self.current_block = HTMLBlock(**{
+                'class_': attrs.get('class', ''),
+                'id': attrs.get('id', ''),
+                'block_id': self.block_id,
+                'text_start': None,
+                'text_end': None,
+                'content': ''
+            })
+
+        if self.current_block:
+            self.tag_depth += 1
+
+            
+    def handle_endtag(self, tag):
+        # Handle formatting tags
+        if self.current_block:
+            self.tag_depth -= 1
+
+        if self.current_tags.get(self.tag_depth, None):
+            self.current_tags.pop(self.tag_depth)
+            
+        # Handle block end
+        if tag in self.block_tags and self.current_block and self.current_block.text_start and self.current_block.text_end: 
+            # Add block tag spanning the content
+            block_tag = f"block_{self.block_id}"
+            
+            # Force insert any buffered content
+            if self.current_line_buffer:
+                self._insert_buffered_line(add_newline=False)
+                
+            # Always add newline at block end
+            self.text_widget.insert("end", "\n\n")
+            
+            # Set block end position before newlines
+            self.current_block.text_end = self.text_widget.index("end-2c")
+            
+            # Add block tag
+            self.text_widget.tag_add(block_tag, 
+                self.current_block.text_start, 
+                self.current_block.text_end
+            )
+            
+            self.block_map[block_tag] = self.current_block
+            self.block_id += 1
+            self.current_block = None
+            self.current_line_length = 0
+            self.current_line_buffer = []      
+            
+    def _insert_buffered_line(self, add_newline=False):
+        """Insert buffered line content with proper formatting"""
+        if not self.current_line_buffer:
+            return
+            
+        # Insert each segment with its tags
+        for text, tags in self.current_line_buffer:
+            self.text_widget.insert("end", text, tags if tags else "")
+        
+        if self.current_block and self.current_block.text_start:
+            self.current_block.text_end = self.text_widget.index("end-1c")
+
+        if add_newline:
+            self.text_widget.insert("end", "\n")
+            
+        self.current_line_buffer = []
+        self.current_line_length = 0
+        
+    def handle_data(self, data):
+        # Track block start
+        if self.current_block and not self.current_block.text_start and data != '\n':
+            self.current_block.text_start = self.text_widget.index("end-1c")
+
+        # Get current formatting tags
+        tags = tuple(self.current_tags.values())
+        
+        if self.fixed_width:
+            words = data.split()
+            for word in words:
+                if word == '\n':
+                    self._insert_buffered_line(add_newline=True)
+                    continue
+                word_length = len(word)
+                # Add space if not first word
+                space_length = 1 if self.current_line_length > 0 else 0
+                
+                if self.current_line_length + word_length + space_length <= self.width:
+                    # Add space between words
+                    if self.current_line_length > 0:
+                        self.current_line_buffer.append((" ", tags))
+                        self.current_line_length += 1
+                    # Add word
+                    self.current_line_buffer.append((word, tags))
+                    self.current_line_length += word_length
+                else:
+                    # Line is full - insert it and start new line
+                    self._insert_buffered_line(add_newline=True)
+                    # Start new line with current word
+                    self.current_line_buffer.append((word, tags))
+                    self.current_line_length = word_length
+        else:
+            # For non-fixed width, just buffer the text
+            self.current_line_buffer.append((data, tags))
+            
+        # # Track block content and end
+        # if self.current_block and data != '\n':
+        #     self.current_block.content += data
+        #     self.current_block.text_end = self.text_widget.index("end-1c")
+        
 
 if __name__ == "__main__":
     import tkinter as tk

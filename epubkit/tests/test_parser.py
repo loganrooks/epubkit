@@ -3,6 +3,7 @@ from pathlib import Path
 import bs4
 import pytest
 from bs4 import BeautifulSoup
+from epubkit.debug import debug_print_dict, log_error, setup_logging
 from epubkit.parser import (
     HTMLCategoryExtractor,
     CategoryPattern, 
@@ -23,6 +24,7 @@ from epubkit.parser import (
 from typing import Dict, Tuple, List, Optional
 
 from epubkit.tests.utils import analyze_extraction_coverage
+
 
 @pytest.fixture
 def sample_selections():
@@ -882,7 +884,7 @@ def test_pattern_review_category_conflicts():
 from bs4 import BeautifulSoup
 import pytest
 from epubkit.parser import extract_supervised_patterns, extract_unsupervised_patterns
-from epubkit.utils import debug_print_dict, load_epub_html
+from epubkit.utils import load_epub_html
 
 def create_test_tag(html_str):
     """Helper to convert HTML string to BS4 tag"""
@@ -1308,6 +1310,239 @@ class TestTextBlockExtraction:
         assert len(entry.text_blocks) == 2
         assert "Valid content." in entry.text_blocks[0]
         assert "More valid text." in entry.text_blocks[1]
+
+
+
+import pytest
+from ebooklib import epub
+from bs4 import BeautifulSoup
+from epubkit.parser import TOCEntry, TOCExtractor
+from pathlib import Path
+
+
+def create_test_epub():
+    """Create test EPUB with section content"""
+    try:
+        # Initialize book
+        book = epub.EpubBook()
+        book.set_identifier('test123')
+        book.set_title('Test Book')
+        book.set_language('en')
+
+        # Load section content
+        example_path = Path(__file__).parent / "examples" / "ebooksection01.xhtml"
+        with open(example_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+
+        # Create content pages
+        nav = epub.EpubNav(uid='nav')
+        nav_content = '''<?xml version="1.0" encoding="utf-8"?>
+        <!DOCTYPE html>
+        <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+            <head>
+                <title>Nav</title>
+            </head>
+            <body>
+                <nav epub:type="toc">
+                    <h1>Table of Contents</h1>
+                    <ol>
+                        <li><a href="chap1.xhtml#filepos242677">I: EXPOSITION</a>
+                            <ol>
+                                <li><a href="chap1.xhtml#filepos243015">9. The Theme</a></li>
+                            </ol>
+                        </li>
+                    </ol>
+                </nav>
+            </body>
+        </html>'''
+        nav.content = nav_content
+
+        # Create main content chapter
+        c1 = epub.EpubHtml(
+            title='Analysis of Dasein',
+            file_name='chap1.xhtml',
+            content=content,
+            uid='chap1'
+        )
+
+        # Add required files
+        book.add_item(epub.EpubNcx())
+        book.add_item(nav)
+        book.add_item(c1)
+
+        # Define Table of Contents
+        book.toc = [
+            (epub.Section('I: EXPOSITION OF THE TASK OF A PREPARATORY ANALYSIS OF DASEIN'), [
+                c1,
+                (epub.Link(
+                    '9. The Theme of the Analytic of Dasein',
+                    'chap1.xhtml#filepos243015',
+                    '243015'
+                ))
+            ])
+        ]
+
+        # Basic spine
+        book.spine = ['nav', c1]
+        book.add_item(epub.EpubNcx())
+
+        # Save EPUB file
+        epub_path = Path(__file__).parent / "temp" / "test.epub"
+        epub_path.parent.mkdir(exist_ok=True)
+        epub.write_epub(str(epub_path), book)
+        
+        return epub_path
+
+    except Exception as e:
+        log_error(e)
+        raise
+
+def test_extract_text_blocks():
+    """Test extraction of text and HTML blocks"""
+    # Create test EPUB
+    epub_path = create_test_epub()
+    
+    # Create TOC structure
+    toc  = [
+    TOCEntry(
+        title="I: EXPOSITION OF THE TASK OF A PREPARATORY ANALYSIS OF DASEIN",
+        href="chap1.xhtml#filepos242677",
+        level=1,
+        text_blocks=[],
+        html_blocks=[]
+    ),
+    TOCEntry(
+        title="9. The Theme of the Analytic of Dasein",
+        href="chap1.xhtml#filepos243015", 
+        level=2,
+        text_blocks=[],
+        html_blocks=[]
+    ),
+    TOCEntry(
+        title="10. How the Analytic of Dasein is to be Distinguished from Anthropology, Psychology, and Biology",
+        href="chap1.xhtml#filepos264273",
+        level=2,
+        text_blocks=[],
+        html_blocks=[]
+    ),
+    TOCEntry(
+        title="11. The Existential Analytic and the Interpretation of Primitive Dasein. The Difficulties of Achieving a 'Natural Conception of the World'",
+        href="chap1.xhtml#filepos288635",
+        level=2,
+        text_blocks=[],
+        html_blocks=[]
+    )
+]
+    
+    # Initialize extractor
+    extractor = TOCExtractor(str(epub_path))
+    extractor.toc_structure = toc
+    
+    # Extract blocks
+    extractor.extract_text_blocks()
+    
+    # Verify first entry's content
+    entry1 = toc[0]
+    assert len(entry1.text_blocks) == 0, f"First entry, {entry1.title}, should not have text blocks: {entry1.text_blocks}"
+    assert len(entry1.html_blocks) == 0, f"First entry, {entry1.title}, should not have HTML blocks: {entry1.html_blocks}"
+
+    # Verify second entry's content
+    entry2 = toc[1]
+    assert len(entry2.text_blocks) > 0, f"Second entry, {entry2.title}, should have text blocks: {entry2.text_blocks}"
+    assert len(entry2.html_blocks) > 0, f"Second entry, {entry2.title}, should have HTML blocks: {entry2.html_blocks}"
+    assert len(entry2.text_blocks) == len(entry2.html_blocks), "Text and HTML block counts do not match"
+
+    # Verify final entry's content
+    entry4 = toc[3]
+    assert len(entry4.text_blocks) > 0, f"Final entry, {entry4.title}, should have text blocks: {entry4.text_blocks}"
+    assert len(entry4.html_blocks) > 0, f"Final entry, {entry4.title}, should have HTML blocks: {entry4.html_blocks}"
+    assert len(entry4.text_blocks) == len(entry4.html_blocks), "Text and HTML block counts do not match"
+
+
+
+    # Check text/HTML mapping
+    for text, html in zip(entry2.text_blocks, entry2.html_blocks):
+        # Convert HTML to text for comparison
+        html_text = BeautifulSoup(html, 'html.parser').get_text().strip()
+        assert text.strip() == html_text, f"Text and HTML blocks do not match: {text} != {html_text}"
+        
+    # Verify specific content
+    expected_text = "WE are ourselves the entities to be analysed."
+    assert any(expected_text in block for block in entry2.text_blocks), f"Expected text not found."
+    
+    # Check second entry
+    entry2 = toc[1]
+    assert len(entry2.text_blocks) > 0
+    assert len(entry2.html_blocks) > 0
+    
+    # Verify merged blocks
+    for text, html in zip(entry2.text_blocks, entry2.html_blocks):
+        soup = BeautifulSoup(html, 'html.parser')
+        assert text.strip() == soup.get_text().strip()
+        
+    # Cleanup
+    epub_path.unlink()
+
+def test_artifact_filtering():
+    """Test filtering of artifacts like page numbers"""
+    epub_path = create_test_epub()
+    extractor = TOCExtractor(str(epub_path))
+    
+    # Create simple TOC entry
+    toc = [TOCEntry(
+        title="Test Chapter",
+        href="chap1.xhtml",
+        level=1,
+        text_blocks=[],
+        html_blocks=[]
+    )]
+    extractor.toc_structure = toc
+    
+    # Add artifact pattern
+    extractor._add_artifact_pattern(r'^H\. \d+$')  # Match page numbers like "H. 42"
+    
+    # Extract blocks
+    extractor.extract_text_blocks(remove_artifacts=True)
+    
+    # Verify artifacts filtered
+    assert not any("H. 42" in block for block in toc[0].text_blocks)
+    
+    # Cleanup
+    epub_path.unlink()
+
+def test_block_merging():
+    """Test merging of incomplete sentences"""
+    epub_path = create_test_epub()
+    extractor = TOCExtractor(str(epub_path))
+    
+    # Create test blocks
+    text_blocks = [
+        "This is an incomplete",
+        "sentence that should merge.",
+        "This is a complete sentence.",
+        "Another incomplete",
+        "sentence to merge."
+    ]
+    
+    html_blocks = [
+        "<p>This is an incomplete</p>",
+        "<p>sentence that should merge.</p>",
+        "<p>This is a complete sentence.</p>",
+        "<p>Another incomplete</p>",
+        "<p>sentence to merge.</p>"
+    ]
+    
+    merged_text, merged_html = extractor._merge_blocks(text_blocks, html_blocks)
+    
+    assert len(merged_text) == 3
+    assert "This is an incomplete sentence that should merge." in merged_text
+    assert "This is a complete sentence." in merged_text
+    assert "Another incomplete sentence to merge." in merged_text
+    
+    # Cleanup
+    epub_path.unlink()
+
+
 
 if __name__ == '__main__':
     pytest.main([__file__])

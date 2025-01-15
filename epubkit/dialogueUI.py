@@ -2153,8 +2153,8 @@ class HTMLTextViewer(ctk.CTkFrame):
 
             # Calculate initial width
             char_width = self.text.tk.call('font', 'measure', self.text.cget('font'), 'x')
-            chars_per_line = self.text.winfo_width() // char_width
-            self._last_width = self.text.winfo_width()
+            chars_per_line = width // char_width
+            self._last_width = width
             
             self.parser = HTMLTextParser(
                 self.text, 
@@ -2320,14 +2320,15 @@ class HTMLTextParser(HTMLParser):
         self.text_widget = text_widget
         self.block_map = block_map
         self.fixed_width = fixed_width
-        self.width = width
-        self.current_tags: dict[int, str] = {} # tag depth and font tag
+        self.width = max(width, 20)  # Ensure minimum width
+        self.current_tags: dict[int, str] = {}
         self.block_id = len(block_map)
         self.current_block: HTMLBlock = None
-        self.current_line = []
-        self.current_line_buffer = []  # Store (text, tags) tuples
+        self.current_line_buffer = []
         self.current_line_length = 0
         self.block_tags = block_tags
+        self.current_block_tag_depth = 0
+        
         
         self.tag_map = {
             'b': 'bold',
@@ -2344,65 +2345,63 @@ class HTMLTextParser(HTMLParser):
         self.tag_depth = 0
         
     def handle_starttag(self, tag, attrs):
-
-        # Handle formatting tags
         attrs = dict(attrs)
-
+        
+        # Start new block
+        if tag in self.block_tags:
+            self.current_block_tag_depth = self.tag_depth
+            if self.current_block is None:
+                self.current_block = HTMLBlock(
+                    block_id=self.block_id,
+                    text_start=None,
+                    text_end=None,
+                    content='',
+                    class_=attrs.get('class', ''),
+                    id=attrs.get('id', '')
+                )
+                
+        # Handle formatting
         if tag in self.tag_map:
             self.current_tags[self.tag_depth] = self.tag_map[tag]
-
-        elif attrs.get('class', '') in self.font_classes:
-            self.current_tags[self.tag_depth] = attrs['class']
-            
-        # Start new paragraph block
-        if tag in self.block_tags and self.current_block is None:
-            self.current_block = HTMLBlock(**{
-                'class_': attrs.get('class', ''),
-                'id': attrs.get('id', ''),
-                'block_id': self.block_id,
-                'text_start': None,
-                'text_end': None,
-                'content': ''
-            })
-
-        if self.current_block:
-            self.tag_depth += 1
+        
+        
+        self.tag_depth += 1
 
             
     def handle_endtag(self, tag):
-        # Handle formatting tags
-        if self.current_block:
-            self.tag_depth -= 1
+        self.tag_depth -= 1
 
-        if self.current_tags.get(self.tag_depth, None):
-            self.current_tags.pop(self.tag_depth)
-            
-        # Handle block end
-        if tag in self.block_tags and self.current_block and self.current_block.text_start and self.current_block.text_end: 
-            # Add block tag spanning the content
-            block_tag = f"block_{self.block_id}"
-            
-            # Force insert any buffered content
+        if self.current_block and tag in self.block_tags:
+            # Flush buffer
+            assert self.tag_depth == self.current_block_tag_depth   
+
             if self.current_line_buffer:
                 self._insert_buffered_line(add_newline=False)
-                
-            # Always add newline at block end
+            
+            # Add block ending newlines
             self.text_widget.insert("end", "\n\n")
             
-            # Set block end position before newlines
+            # Set end position before newlines
             self.current_block.text_end = self.text_widget.index("end-2c")
             
             # Add block tag
-            self.text_widget.tag_add(block_tag, 
-                self.current_block.text_start, 
+            block_tag = f"block_{self.block_id}"
+            self.text_widget.tag_add(block_tag,
+                self.current_block.text_start,
                 self.current_block.text_end
             )
             
             self.block_map[block_tag] = self.current_block
             self.block_id += 1
             self.current_block = None
+            self.current_line_buffer = []
             self.current_line_length = 0
-            self.current_line_buffer = []      
+
+                
+        # Handle formatting tags
+        if self.current_tags.get(self.tag_depth, None):
+            self.current_tags.pop(self.tag_depth)
+      
             
     def _insert_buffered_line(self, add_newline=False):
         """Insert buffered line content with proper formatting"""
@@ -2422,41 +2421,48 @@ class HTMLTextParser(HTMLParser):
         self.current_line_buffer = []
         self.current_line_length = 0
         
-    def handle_data(self, data):
-        # Track block start
-        if self.current_block and not self.current_block.text_start and data != '\n':
-            self.current_block.text_start = self.text_widget.index("end-1c")
+    def handle_data(self, data: str):
 
-        # Get current formatting tags
+        if self.current_block:
+            original_data = data
+            data.replace("\n", " ")
+            
+        # Set block start if needed
+        if self.current_block and not self.current_block.text_start:
+            self.current_block.text_start = self.text_widget.index("end-1c")
+            
+        # Clean data
+        text = ' '.join(data.split())
+        if not text:
+            return
+            
+        # Get current tags
         tags = tuple(self.current_tags.values())
         
-        if self.fixed_width:
-            words = data.split()
+        if self.fixed_width: # wraping at word boundaries
+            words = text.split()
             for word in words:
-                if word == '\n':
-                    self._insert_buffered_line(add_newline=True)
-                    continue
                 word_length = len(word)
-                # Add space if not first word
-                space_length = 1 if self.current_line_length > 0 else 0
+                space_needed = 1 if self.current_line_length > 0 else 0
                 
-                if self.current_line_length + word_length + space_length <= self.width:
-                    # Add space between words
-                    if self.current_line_length > 0:
+                # Check if word fits
+                if self.current_line_length + word_length + space_needed <= self.width:
+                    if space_needed:
                         self.current_line_buffer.append((" ", tags))
                         self.current_line_length += 1
-                    # Add word
                     self.current_line_buffer.append((word, tags))
                     self.current_line_length += word_length
                 else:
-                    # Line is full - insert it and start new line
+                    # Insert current line and start new
                     self._insert_buffered_line(add_newline=True)
-                    # Start new line with current word
                     self.current_line_buffer.append((word, tags))
                     self.current_line_length = word_length
         else:
-            # For non-fixed width, just buffer the text
-            self.current_line_buffer.append((data, tags))
+            self.current_line_buffer.append((text, tags))
+            
+        # Update block content
+        if self.current_block:
+            self.current_block.content += text
             
         # # Track block content and end
         # if self.current_block and data != '\n':

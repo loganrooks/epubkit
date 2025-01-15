@@ -1,15 +1,22 @@
+from __future__ import annotations
 from itertools import islice
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 import re
 import tkinter as tk
 from tkinter import ttk
 from tkinter import messagebox
+from tkinter import font
 from typing import Dict, List, Optional, TypedDict, get_args
 
 from bs4 import BeautifulSoup
 from tkhtmlview import HTMLLabel, HTMLScrolledText
+from epubkit.debug import log_error, setup_logging
 from epubkit.parser import EPUBSelectorBackend, ExtractedText, HTMLInfo, ImmutableTagInfo, PatternReviewBackend, CategoryType, SelectionReviewBackend, TOCEntry, TOCExtractor
+import customtkinter as ctk
+from html.parser import HTMLParser
+
+setup_logging()
 
 @dataclass
 class DialogText:
@@ -122,6 +129,7 @@ class DialogStyle:
     BOLD_FONT = ("TkDefaultFont", 12, "bold")
     HOVER_STYLE = {
         "background": ACCENT_COLOR,
+        "foreground": FG_COLOR,
         "font": BOLD_FONT
     }
     
@@ -191,6 +199,8 @@ class BaseDialog(tk.Toplevel):
                 
             except Exception as e:
                 print(f"Error during cleanup: {e}")
+                self._handle_error(e)
+                raise
 
     def on_close(self):
         """Handle window close"""
@@ -201,6 +211,11 @@ class BaseDialog(tk.Toplevel):
         """Ensure cleanup on destroy"""
         self.cleanup()
         super().destroy()
+
+    def _handle_error(e):
+        """Handle exceptions in dialog"""
+        log_error(e)
+
 
 @dataclass
 class EPUBTagSelectorText(DialogText):
@@ -1012,7 +1027,10 @@ class TOCExtractorText(DialogText):
         "candidates": "Select ToC Page",
         "structure": "Review Structure",
         "entry": "Edit Entry",
-        "extraction": "Extraction"
+        "extraction": "Extraction",
+        "block_review": "Review Block",
+        "rendered_text": "Text Preview",
+        "html_source": "HTML Source"
     }
     
     LABELS = {
@@ -1021,7 +1039,8 @@ class TOCExtractorText(DialogText):
         "hierarchy": "ToC Hierarchy",
         "level": "Level {}",
         "parent": "Parent Entry",
-        "position": "Position"
+        "position": "Position",
+        "move": "Move Entry"
     }
     
     BUTTONS = {
@@ -1033,7 +1052,9 @@ class TOCExtractorText(DialogText):
         "add": "Add Entry",
         "remove": "Remove",
         "move": "Move",
-        "save": "Save Changes"
+        "save": "Save Changes",
+        "remove_pattern": "Remove as Pattern",
+        "cancel": "Cancel"
     }
     
     MESSAGES = {
@@ -1041,7 +1062,9 @@ class TOCExtractorText(DialogText):
         "confirm_structure": "Is this ToC structure correct?",
         "confirm_remove": "Remove this entry and its children?",
         "no_parent": "Entry must have a parent",
-        "invalid_position": "Invalid position"
+        "invalid_position": "Invalid position",
+        "confirm_remove_block": "Remove this block and create a pattern to exclude similar content?",
+        "pattern_created": "Pattern created successfully"
     }
 
 class TOCExtractorDialogUI(BaseDialog):
@@ -1095,7 +1118,7 @@ class TOCExtractorDialogUI(BaseDialog):
         self.notebook.add(self.review_page, text=self.ui_text.TITLES["extraction"])
 
         # Configure hover tag
-        for widget in (self.text_display, self.html_preview, self.review_text):
+        for widget in (self.text_display, self.html_preview):
             widget.tag_configure(
                 "hover",
                 background=self.style.HOVER_STYLE["background"],
@@ -1221,26 +1244,16 @@ class TOCExtractorDialogUI(BaseDialog):
     def _create_review_page(self) -> ttk.Frame:
         """Create page for reviewing extracted text blocks"""
         frame = ttk.Frame(self.notebook)
+        frame.pack(fill=tk.BOTH, expand=True)
+
+
+        self.review_text = HTMLTextViewer(frame, self.style)
+        self.review_text.pack(fill="both", expand=True)
+        self.review_text.on_select = self._on_block_selected
         
-        # Text display with scrollbar
-        text_frame = ttk.Frame(frame)
-        text_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-        
-        scrollbar = ttk.Scrollbar(text_frame)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        
-        self.review_text = tk.Text(
-            text_frame,
-            wrap=tk.WORD,
-            yscrollcommand=scrollbar.set,
-            **self.style.TEXT_STYLE
-        )
-        self.review_text.pack(fill=tk.BOTH, expand=True)
-        scrollbar.config(command=self.review_text.yview)
-        
-        # Control buttons
         control_frame = ttk.Frame(frame)
-        control_frame.pack(fill=tk.X, padx=5, pady=5)
+
+        control_frame.pack(fill=tk.X, side=tk.BOTTOM, pady=5)
         
         ttk.Button(
             control_frame,
@@ -1383,53 +1396,70 @@ class TOCExtractorDialogUI(BaseDialog):
             self.notebook.select(1)
 
     def _populate_review_text(self) -> None:
-        """Display first N text blocks for review with headers"""
-        self.review_text.delete("1.0", tk.END)
+        """Display extracted text blocks with diff viewing"""
+        self.review_text.text.delete("1.0", "end")
         
-        def process_entry(entry: TOCEntry, level: int = 0, block_count: int = 0) -> int:
-            """Recursively process entries and their blocks
-            Returns: Updated block count
+        def build_content(entry: TOCEntry, blocks_added: int = 0, level: int = 0) -> tuple[str, int]:
             """
-            # Insert header with indentation
-            header_start = self.review_text.index("end-1c")
-            self.review_text.insert("end", f"{'  ' * level}{entry.title}\n\n")
-            header_end = self.review_text.index("end-1c")
+            Build HTML content string for entry and children.
+            Returns tuple of (content, total_blocks_added)
+            """
+            content = []
             
-            # Tag header
-            header_tag = f"block_{block_count}"
-            self.review_text.tag_add(header_tag, header_start, header_end)
-            self.review_text.tag_lower(header_tag, "hover")
-            block_count += 1
+            # Add header
+            content.append(f"<h{level+1}>{entry.title}</h{level+1}>")
             
-            # Process text blocks
-            for block in entry.text_blocks:
-                if block_count >= self.FIRST_N_BLOCKS:
-                    return block_count
-                    
-                block_start = self.review_text.index("end-1c")
-                self.review_text.insert("end", f"{'  ' * (level + 1)}{block}\n\n")
-                block_end = self.review_text.index("end-1c")
+            # Add blocks up to limit
+            remaining = self.FIRST_N_BLOCKS - blocks_added
+            if remaining > 0:
+                blocks_to_add = entry.html_blocks[:remaining]
+                content.extend(blocks_to_add)
+                blocks_added += len(blocks_to_add)
                 
-                block_tag = f"block_{block_count}"
-                self.review_text.tag_add(block_tag, block_start, block_end)
-                self.review_text.tag_lower(block_tag, "hover")
-                block_count += 1
+                # Process children if we haven't hit limit
+                for child in entry.children:
+                    if blocks_added < self.FIRST_N_BLOCKS:
+                        child_content, blocks_added = build_content(child, blocks_added, level + 1)
+                        content.append(child_content)
+                    else:
+                        break
+                        
+            return "\n".join(content), blocks_added
+
+        # Build complete content
+        complete_html = "\n".join(
+            build_content(entry)[0]  # Only take content, discard final count
+            for entry in self.toc_backend.toc_structure
+        )
+        
+        # Set content once
+        self.review_text.set_html_content(complete_html)
+
+    def _on_block_selected(self, block_tag: str) -> None:
+        """Handle block selection"""
+        if block_tag not in self.review_text.block_map:
+            return
             
-            # Process children recursively
-            for child in entry.children:
-                block_count = process_entry(child, level + 1, block_count)
-                if block_count >= self.FIRST_N_BLOCKS:
-                    break
-                    
-            return block_count
-
-        # Start recursive processing from root entries    
-        block_count = 0
-        for entry in self.toc_backend.toc_structure:
-            block_count = process_entry(entry, block_count=block_count)
-            if block_count >= self.FIRST_N_BLOCKS:
-                break
-
+        block_info = self.review_text.block_map[block_tag]
+        
+        if block_info['type'] == 'content':
+            # Show dialog with HTML preview
+            dialog = BlockReviewDialog(
+                self,
+                self.ui_text.TITLES["block_review"],
+                block_info['text'],
+                block_info['html'],
+                style=self.style,
+                ui_text=self.ui_text
+            )
+            
+            if dialog.result == 'remove':
+                # Create artifact pattern
+                pattern = f"^{re.escape(block_info['text'])}$"
+                self.toc_backend._add_artifact_pattern(pattern)
+                
+                # Refresh view
+                self._populate_review_text()
 
     def _populate_text_display(self, html_map: Dict[str, dict]):
         """
@@ -1465,39 +1495,6 @@ class TOCExtractorDialogUI(BaseDialog):
                     add_entries(entry.children, item_id)
                     
         add_entries(self.toc_backend.toc_structure)
-
-    def _create_review_page(self) -> ttk.Frame:
-        frame = ttk.Frame(self.notebook)
-        
-        # Use HTMLScrolledText for review
-        self.review_view = HTMLScrolledText(
-            frame,
-            padx=20,
-            pady=10,
-            **self.style.TEXT_STYLE
-        )
-        self.review_view.pack(fill=tk.BOTH, expand=True)
-        
-        
-        # Control buttons
-        control_frame = ttk.Frame(frame)
-        control_frame.pack(fill=tk.X, padx=5, pady=5)
-        
-        ttk.Button(
-            control_frame,
-            text=self.ui_text.BUTTONS["remove"],
-            command=self.remove_artifact,
-            style="TOC.TButton"
-        ).pack(side=tk.LEFT)
-        
-        ttk.Button(
-            control_frame,
-            text=self.ui_text.BUTTONS["confirm"],
-            command=self.confirm_extraction,
-            style="TOC.TButton"
-        ).pack(side=tk.RIGHT)
-        
-        return frame
         
     def add_entry(self):
         """Add new TOC entry"""
@@ -1624,11 +1621,20 @@ class TOCExtractorDialogUI(BaseDialog):
                     "Error",
                     f"Failed to extract text: {str(e)}"
                 )
+                self._handle_error(e)
+                raise
                 
             finally:
                 self.result = None
                 progress.stop()
                 progress.destroy()
+    def _handle_error(self, error: Exception) -> None:
+        """Handle error with error dialog"""
+        messagebox.showerror(
+            self.ui_text.TITLES["main"],
+            str(error)
+        )
+        log_error(error)
 
     def on_close(self):
         """Handle window close with confirmation"""
